@@ -557,6 +557,12 @@ function createTab(
         cursorStyle: 'bar',
         allowProposedApi: true,
         scrollback: 10000,
+        // When Codex CLI (Ink TUI) activates the alternate screen buffer,
+        // convert mouse wheel events into Up/Down arrow key sequences.
+        // Without this, scroll behavior is inconsistent across devices —
+        // precision touchpads vs standard mice produce different wheel
+        // event types, causing some devices to lose scroll entirely.
+        alternateScrollMode: true,
     });
 
     const fitAddon = new FitAddon();
@@ -618,6 +624,7 @@ function createTab(
         }
         // Ctrl+V: paste from clipboard
         if (e.ctrlKey && (e.code === 'KeyV' || e.key === 'v' || e.key === 'V')) {
+            e.preventDefault();
             navigator.clipboard.readText().then((text) => {
                 if (text) api.pty.write(sessionId, text);
             });

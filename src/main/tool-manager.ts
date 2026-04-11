@@ -253,6 +253,12 @@ export class ToolManager {
         // Use CLI FLAGS — highest precedence, guaranteed
         // =============================================
 
+        // Shared config root for all embedded tools.
+        const appDataDir = path.join(
+            process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+            '4RouterAi'
+        );
+
         if (tool.id === 'claude-code') {
             if (os.platform() === 'win32') {
                 const gitBashPath = this.resolveClaudeGitBashPath();
@@ -268,18 +274,17 @@ export class ToolManager {
             // Isolate bundled Claude Code config from any system-installed Claude Code.
             // Source: cc/src/utils/envUtils.ts → CLAUDE_CONFIG_DIR overrides ~/.claude
             // Source: cc/src/utils/env.ts:25  → .claude.json = join(CLAUDE_CONFIG_DIR, filename)
-            const appDataDir = path.join(
-                process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
-                '4RouterAi'
-            );
-            const claudeConfigDir = path.join(appDataDir, '.claude');
-            fs.mkdirSync(claudeConfigDir, { recursive: true });
-            env['CLAUDE_CONFIG_DIR'] = claudeConfigDir;
-            console.log(`[ToolManager] Isolated CLAUDE_CONFIG_DIR: ${claudeConfigDir}`);
+            //
+            // When CLAUDE_CONFIG_DIR is set, CC places everything directly inside
+            // it (settings.json, sessions/, backups/, etc.) — no nested .claude/.
+            const claudeHomeDir = path.join(appDataDir, 'claude-home');
+            fs.mkdirSync(claudeHomeDir, { recursive: true });
+            env['CLAUDE_CONFIG_DIR'] = claudeHomeDir;
+            console.log(`[ToolManager] Isolated CLAUDE_CONFIG_DIR: ${claudeHomeDir}`);
 
             // Skip Claude Code's built-in onboarding — 4RouterAi's own welcome page replaces it.
-            // .claude.json lives INSIDE CLAUDE_CONFIG_DIR (see cc/src/utils/env.ts:24-25).
-            const claudeJsonPath = path.join(claudeConfigDir, '.claude.json');
+            // .claude.json lives at join(CLAUDE_CONFIG_DIR, filename) (see cc/src/utils/env.ts:24-25).
+            const claudeJsonPath = path.join(claudeHomeDir, '.claude.json');
             try {
                 let claudeJson: any = {};
                 if (fs.existsSync(claudeJsonPath)) {
@@ -307,36 +312,109 @@ export class ToolManager {
             if (model) {
                 settings['model'] = model;
             }
-            if (Object.keys(settings.env).length > 0) {
-                const settingsFile = path.join(appDataDir, 'claude-settings.json');
-                fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf-8');
-                args.push('--settings', settingsFile);
-                console.log(`[ToolManager] Wrote Claude settings to ${settingsFile}`);
-            }
+
+            // ── 4RouterAi embedded-environment defaults ──
+            // Disable attribution header — 3rd-party base_url proxies don't
+            // recognise x-anthropic-billing-header and may reject it.
+            settings.env['CLAUDE_CODE_ATTRIBUTION_HEADER'] = '0';
+            // Suppress all nonessential network traffic (telemetry, auto-update
+            // checks, release notes, MCP registry, GrowthBook, etc.). The host
+            // app handles updates; these requests would just add latency.
+            settings.env['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'] = '1';
+            // Prevent cc from writing OSC escape sequences to change the
+            // terminal title — inside xterm.js they are either ignored or
+            // produce visual artefacts.
+            settings.env['CLAUDE_CODE_DISABLE_TERMINAL_TITLE'] = '1';
+            // When ANTHROPIC_BASE_URL is a non-Anthropic host, cc auto-disables
+            // tool search (defer_loading / tool_reference). Force it on so MCP
+            // tools are lazily loaded, saving context window tokens.
+            settings.env['ENABLE_TOOL_SEARCH'] = 'true';
+            // Skip the WebFetch domain-blocklist preflight that hits
+            // api.anthropic.com — unreachable through a 3rd-party proxy,
+            // causing every WebFetch call to fail with DomainCheckFailedError.
+            settings['skipWebFetchPreflight'] = true;
+
+            // Always write the settings file — the env block now contains
+            // 4RouterAi defaults even when apiKey/baseUrl are absent.
+            // Uses the native CC user-settings filename (settings.json) at
+            // CLAUDE_CONFIG_DIR root, matching cc/src/utils/settings/settings.ts.
+            const settingsFile = path.join(claudeHomeDir, 'settings.json');
+
+            fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf-8');
+            args.push('--settings', settingsFile);
+            console.log(`[ToolManager] Wrote Claude settings to ${settingsFile}`);
         } else if (tool.id === 'codex') {
-            // codex -c model_provider="4routerai" -c 'model_providers.4routerai.base_url="..."'
+            // ── Write a config.toml and point CODEX_HOME at it ──
+            // Codex reads its config from $CODEX_HOME/config.toml
+            // (default: ~/.codex/config.toml). Using a 4RouterAi-
+            // scoped directory keeps our config isolated.
+            const codexHomeDir = path.join(appDataDir, 'codex-home');
+            fs.mkdirSync(codexHomeDir, { recursive: true });
+
+            const lines: string[] = [];
+
+            // ── Provider & model ──
+            // model / model_reasoning_effort are root-level keys — they MUST
+            // appear before any [section] header, because in TOML everything
+            // after a section header belongs to that table.
             if (baseUrl) {
                 const providerName = '4routerai';
-                args.push('-c', `model_provider="${providerName}"`);
-                args.push('-c', `model_providers.${providerName}.base_url="${baseUrl}"`);
-                args.push('-c', `model_providers.${providerName}.name="${providerName}"`);
-                args.push('-c', `model_providers.${providerName}.env_key="OPENAI_API_KEY"`);
-                args.push('-c', `model_providers.${providerName}.wire_api="responses"`);
-            }
-            // API key via env var (codex reads OPENAI_API_KEY from env)
-            if (apiKey) {
-                env[tool.envKeyName] = apiKey;
+                lines.push(`model_provider = "${providerName}"`);
             }
             if (model) {
-                args.push('-c', `model="${model}"`);
+                lines.push(`model = "${model}"`);
             }
             const reasoningEffort = this.configStore.get('codexReasoningEffort') as string;
             if (reasoningEffort) {
-                args.push('-c', `model_reasoning_effort="${reasoningEffort}"`);
+                lines.push(`model_reasoning_effort = "${reasoningEffort}"`);
+            }
+            if (baseUrl) {
+                const providerName = '4routerai';
+                lines.push('');
+                lines.push(`[model_providers.${providerName}]`);
+                lines.push(`name = "${providerName}"`);
+                lines.push(`base_url = "${baseUrl}"`);
+                lines.push(`wire_api = "responses"`);
             }
             const verbosity = this.configStore.get('codexVerbosity') as string;
             if (verbosity) {
-                args.push('-c', `model_verbosity="${verbosity}"`);
+                lines.push(`model_verbosity = "${verbosity}"`);
+            }
+
+            // ── Context window & compaction ──
+            lines.push('');
+            lines.push('model_context_window = 1000000');
+            lines.push('model_auto_compact_token_limit = 9000000');
+
+            // ── 4RouterAi embedded-environment defaults ──
+            // Disable self-update checks — the host app manages tools.
+            lines.push('');
+            lines.push('check_for_update_on_startup = false');
+            // Disable analytics / telemetry in the embedded context.
+            lines.push('');
+            lines.push('[analytics]');
+            lines.push('enabled = false');
+
+            const configToml = lines.join('\n') + '\n';
+            const configFile = path.join(codexHomeDir, 'config.toml');
+            fs.writeFileSync(configFile, configToml, 'utf-8');
+            console.log(`[ToolManager] Wrote Codex config to ${configFile}`);
+
+            // Tell codex to use our isolated config directory.
+            env['CODEX_HOME'] = codexHomeDir;
+
+            // Write API key into auth.json — codex's native credential
+            // storage format (see codex-rs/login/src/auth/manager.rs).
+            // This avoids relying on the OPENAI_API_KEY env var which
+            // could leak into child processes.
+            if (apiKey) {
+                const authJson = {
+                    auth_mode: 'apikey',
+                    OPENAI_API_KEY: apiKey,
+                };
+                const authFile = path.join(codexHomeDir, 'auth.json');
+                fs.writeFileSync(authFile, JSON.stringify(authJson, null, 2), 'utf-8');
+                console.log(`[ToolManager] Wrote Codex auth to ${authFile}`);
             }
         }
 

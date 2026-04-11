@@ -84,4 +84,5 @@ coverage/
 
 # Claude Code 
 cc-recovered-main/
-
+# Codex
+codex-main/
