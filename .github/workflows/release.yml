@@ -3,7 +3,6 @@ name: Build & Release
 on:
   push:
     branches: [main]
-    paths: ['package.json']
 
 permissions:
   contents: write
@@ -74,6 +73,8 @@ jobs:
       - name: Package Windows installer
         if: steps.check_tag.outputs.exists == 'false'
         run: npx electron-builder --win nsis --config.win.requestedExecutionLevel=asInvoker
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ── Release ──
       - name: Create GitHub Release
