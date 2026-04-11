@@ -1,6 +1,6 @@
 {
     "models": {
-        "anthropic": "opus",
+        "anthropic": "opus[1m]",
         "openai": "gpt-5.4"
     },
     "codexReasoningEffort": "xhigh",
