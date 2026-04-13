@@ -557,12 +557,6 @@ function createTab(
         cursorStyle: 'bar',
         allowProposedApi: true,
         scrollback: 10000,
-        // When Codex CLI (Ink TUI) activates the alternate screen buffer,
-        // convert mouse wheel events into Up/Down arrow key sequences.
-        // Without this, scroll behavior is inconsistent across devices —
-        // precision touchpads vs standard mice produce different wheel
-        // event types, causing some devices to lose scroll entirely.
-        alternateScrollMode: true,
     });
 
     const fitAddon = new FitAddon();

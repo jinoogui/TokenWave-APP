@@ -86,6 +86,18 @@ export class PtyManager {
 
             const env = { ...toolBaseEnv, ...launchConfig.env };
 
+            // On Windows, older ConPTY builds silently mishandle DECSTBM scroll-
+            // region sequences that Codex uses (in Standard mode) to push chat
+            // history into the terminal scrollback.  The result: the scrollback
+            // stays empty and no scrollbar ever appears.
+            //
+            // Setting ZELLIJ=1 tricks Codex into using its Zellij-compatible
+            // rendering path, which inserts history via plain newlines instead
+            // of DECSTBM — an operation every ConPTY version handles correctly.
+            if (isWin && toolId === 'codex') {
+                env.ZELLIJ = '1';
+            }
+
             if (isWin) {
                 const cmdParts = [`& "${launchConfig.bin}"`];
                 for (const arg of launchConfig.args) {
