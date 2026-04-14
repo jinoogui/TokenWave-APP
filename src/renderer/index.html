@@ -210,7 +210,7 @@
     <div class="modal-overlay"></div>
     <div class="modal-content">
       <div class="modal-header">
-        <h2>设置</h2>
+        <h2>设置 <span id="settings-app-version" style="font-size:13px;font-weight:normal;color:#8b949e;"></span></h2>
         <button id="btn-close-settings" class="btn-icon">&times;</button>
       </div>
       <div class="modal-body">
@@ -232,6 +232,14 @@
           <div class="setting-row">
             <label>Model</label>
             <input type="text" id="settings-model-anthropic" class="text-input" placeholder="opus">
+          </div>
+          <div class="setting-row">
+            <label>Reasoning Effort</label>
+            <input type="text" id="settings-cc-effort" class="text-input" placeholder="high">
+          </div>
+          <div class="setting-row">
+            <label>无审批模式(自动同意agent所有操作)</label>
+            <input type="checkbox" id="settings-cc-bypass-permissions">
           </div>
         </div>
 
@@ -260,6 +268,10 @@
           <div class="setting-row">
             <label>Verbosity</label>
             <input type="text" id="settings-verbosity" class="text-input" placeholder="high">
+          </div>
+          <div class="setting-row">
+            <label>无审批模式(自动同意agent所有操作)</label>
+            <input type="checkbox" id="settings-codex-bypass-permissions">
           </div>
         </div>
 

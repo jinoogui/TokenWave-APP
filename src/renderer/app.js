@@ -773,6 +773,12 @@ function setupSettings() {
         if (openaiBaseUrl) await api.config.setBaseUrl('openai', openaiBaseUrl);
         if (anthropicModel) await api.config.setModel('anthropic', anthropicModel);
         if (openaiModel) await api.config.setModel('openai', openaiModel);
+        const ccEffort = /** @type {HTMLInputElement} */ ($('#settings-cc-effort'))?.value?.trim();
+        await api.config.set('ccEffortLevel', ccEffort || '');
+        const ccBypassPermissions = /** @type {HTMLInputElement} */ ($('#settings-cc-bypass-permissions'))?.checked || false;
+        await api.config.set('ccBypassPermissions', ccBypassPermissions);
+        const codexBypassPermissions = /** @type {HTMLInputElement} */ ($('#settings-codex-bypass-permissions'))?.checked || false;
+        await api.config.set('codexBypassPermissions', codexBypassPermissions);
         const reasoningEffort = /** @type {HTMLInputElement} */ ($('#settings-reasoning-effort'))?.value?.trim();
         const verbosity = /** @type {HTMLInputElement} */ ($('#settings-verbosity'))?.value?.trim();
         if (reasoningEffort) await api.config.set('codexReasoningEffort', reasoningEffort);
@@ -822,6 +828,16 @@ async function openSettings() {
     if (anthropicModelInput) anthropicModelInput.value = anthropicModel || '';
     if (openaiModelInput) openaiModelInput.value = openaiModel || '';
 
+    // Load Claude Code effort level
+    const ccEffort = await api.config.get('ccEffortLevel');
+    const ccEffortInput = /** @type {HTMLInputElement} */ ($('#settings-cc-effort'));
+    if (ccEffortInput) ccEffortInput.value = ccEffort || '';
+
+    // Load Claude Code bypass-permissions toggle
+    const ccBypass = await api.config.get('ccBypassPermissions');
+    const ccBypassInput = /** @type {HTMLInputElement} */ ($('#settings-cc-bypass-permissions'));
+    if (ccBypassInput) ccBypassInput.checked = !!ccBypass;
+
     // Load Codex reasoning params
     const reasoningEffort = await api.config.get('codexReasoningEffort');
     const verbosity = await api.config.get('codexVerbosity');
@@ -829,6 +845,11 @@ async function openSettings() {
     const verbosityInput = /** @type {HTMLInputElement} */ ($('#settings-verbosity'));
     if (reasoningInput) reasoningInput.value = reasoningEffort || '';
     if (verbosityInput) verbosityInput.value = verbosity || '';
+
+    // Load Codex bypass-permissions toggle
+    const codexBypass = await api.config.get('codexBypassPermissions');
+    const codexBypassInput = /** @type {HTMLInputElement} */ ($('#settings-codex-bypass-permissions'));
+    if (codexBypassInput) codexBypassInput.checked = !!codexBypass;
 
     // Load stored API keys (shown as password fields, revealable via eye button)
     const anthropicInput = /** @type {HTMLInputElement} */ ($('#settings-key-anthropic'));
@@ -839,6 +860,13 @@ async function openSettings() {
     if (openaiInput) openaiInput.value = storedOpenaiKey || '';
 
     settingsModal.classList.remove('hidden');
+
+    // Show app version
+    const versionEl = document.getElementById('settings-app-version');
+    if (versionEl) {
+        const version = await api.app.getVersion();
+        versionEl.textContent = version ? `v${version}` : '';
+    }
 
     // Load debug launch config previews
     loadDebugPreviews();

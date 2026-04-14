@@ -10,8 +10,11 @@ interface ConfigSchema {
     models: Record<string, string>;
     codexReasoningEffort: string;
     codexVerbosity: string;
+    ccEffortLevel: string;
     fontSize: number;
     fontFamily: string;
+    ccBypassPermissions: boolean;
+    codexBypassPermissions: boolean;
     firstLaunch: boolean;
 }
 
@@ -24,8 +27,11 @@ const defaults: ConfigSchema = {
     models: { anthropic: 'opus', openai: 'gpt-5.3-codex' },
     codexReasoningEffort: 'xhigh',
     codexVerbosity: 'high',
+    ccEffortLevel: 'high',
     fontSize: 14,
     fontFamily: 'Cascadia Code, Consolas, monospace',
+    ccBypassPermissions: false,
+    codexBypassPermissions: false,
     firstLaunch: true,
 };
 

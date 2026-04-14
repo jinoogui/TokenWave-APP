@@ -30,6 +30,61 @@ interface ResolvedToolPath {
     launchMode: 'node-script' | 'command';
 }
 
+/**
+ * Extract user-managed sections from an existing Codex config.toml,
+ * filtering out host-controlled keys and sections that 4RouterAi
+ * regenerates on every launch.
+ */
+function preserveUserConfig(existing: string): string {
+    // Section headers that the host app fully controls (regenerated each launch).
+    const hostSections = new Set([
+        '[model_providers.4routerai]',
+        '[analytics]',
+    ]);
+    // Root-level keys that the host app controls.
+    const hostRootKeys = new Set([
+        'model_provider',
+        'model',
+        'model_reasoning_effort',
+        'model_context_window',
+        'model_auto_compact_token_limit',
+        'check_for_update_on_startup',
+        'model_verbosity',
+        'approval_policy',
+        'sandbox_mode',
+    ]);
+
+    const lines = existing.split('\n');
+    const preserved: string[] = [];
+    let inHostSection = false;
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+
+        // Detect section headers — e.g. [windows], [projects.'...'], [notice]
+        if (/^\[.+\]/.test(trimmed)) {
+            inHostSection = hostSections.has(trimmed);
+            if (!inHostSection) {
+                preserved.push(line);
+            }
+            continue;
+        }
+
+        // Inside a host-controlled section → skip the line
+        if (inHostSection) continue;
+
+        // Root-level area → filter out host-controlled keys
+        const keyMatch = trimmed.match(/^(\w+)\s*=/);
+        if (keyMatch && hostRootKeys.has(keyMatch[1])) continue;
+
+        preserved.push(line);
+    }
+
+    // Trim leading/trailing blank lines and return with surrounding newlines
+    const result = preserved.join('\n').trim();
+    return result ? '\n' + result + '\n' : '';
+}
+
 export class ToolManager {
     private toolDefinitions: ToolInfo[] = [
         {
@@ -329,10 +384,20 @@ export class ToolManager {
             // tool search (defer_loading / tool_reference). Force it on so MCP
             // tools are lazily loaded, saving context window tokens.
             settings.env['ENABLE_TOOL_SEARCH'] = 'true';
+            // Set reasoning effort level for Claude Code.
+            const ccEffort = this.configStore.get('ccEffortLevel') as string;
+            if (ccEffort) {
+                settings.env['CLAUDE_CODE_EFFORT_LEVEL'] = ccEffort;
+            }
             // Skip the WebFetch domain-blocklist preflight that hits
             // api.anthropic.com — unreachable through a 3rd-party proxy,
             // causing every WebFetch call to fail with DomainCheckFailedError.
             settings['skipWebFetchPreflight'] = true;
+
+            // Bypass all permission prompts when the user has opted in.
+            if (this.configStore.get('ccBypassPermissions')) {
+                settings.permissions = { defaultMode: 'bypassPermissions' };
+            }
 
             // Always write the settings file — the env block now contains
             // 4RouterAi defaults even when apiKey/baseUrl are absent.
@@ -344,19 +409,26 @@ export class ToolManager {
             args.push('--settings', settingsFile);
             console.log(`[ToolManager] Wrote Claude settings to ${settingsFile}`);
         } else if (tool.id === 'codex') {
-            // ── Write a config.toml and point CODEX_HOME at it ──
+            // ── Merge host-controlled settings into config.toml ──
             // Codex reads its config from $CODEX_HOME/config.toml
             // (default: ~/.codex/config.toml). Using a 4RouterAi-
             // scoped directory keeps our config isolated.
+            //
+            // Important: Codex writes user preferences (trust_level,
+            // sandbox mode, notice acknowledgements, etc.) back into
+            // this same config.toml at runtime. A full overwrite would
+            // destroy those preferences, forcing the user to re-confirm
+            // settings on every new session. Instead we regenerate only
+            // the host-controlled fields and preserve the rest.
             const codexHomeDir = path.join(appDataDir, 'codex-home');
             fs.mkdirSync(codexHomeDir, { recursive: true });
 
             const lines: string[] = [];
 
-            // ── Provider & model ──
-            // model / model_reasoning_effort are root-level keys — they MUST
-            // appear before any [section] header, because in TOML everything
-            // after a section header belongs to that table.
+            // ── Root-level keys ──
+            // All root-level keys MUST appear before any [section] header,
+            // because in TOML everything after a section header belongs to
+            // that table until the next section header.
             if (baseUrl) {
                 const providerName = '4routerai';
                 lines.push(`model_provider = "${providerName}"`);
@@ -368,6 +440,21 @@ export class ToolManager {
             if (reasoningEffort) {
                 lines.push(`model_reasoning_effort = "${reasoningEffort}"`);
             }
+            const verbosity = this.configStore.get('codexVerbosity') as string;
+            if (verbosity) {
+                lines.push(`model_verbosity = "${verbosity}"`);
+            }
+            lines.push('model_context_window = 1000000');
+            lines.push('model_auto_compact_token_limit = 9000000');
+            lines.push('check_for_update_on_startup = false');
+
+            // Bypass all approval prompts and sandbox when the user has opted in.
+            if (this.configStore.get('codexBypassPermissions')) {
+                lines.push('approval_policy = "never"');
+                lines.push('sandbox_mode = "danger-full-access"');
+            }
+
+            // ── Sections ──
             if (baseUrl) {
                 const providerName = '4routerai';
                 lines.push('');
@@ -376,27 +463,23 @@ export class ToolManager {
                 lines.push(`base_url = "${baseUrl}"`);
                 lines.push(`wire_api = "responses"`);
             }
-            const verbosity = this.configStore.get('codexVerbosity') as string;
-            if (verbosity) {
-                lines.push(`model_verbosity = "${verbosity}"`);
-            }
 
-            // ── Context window & compaction ──
-            lines.push('');
-            lines.push('model_context_window = 1000000');
-            lines.push('model_auto_compact_token_limit = 9000000');
-
-            // ── 4RouterAi embedded-environment defaults ──
-            // Disable self-update checks — the host app manages tools.
-            lines.push('');
-            lines.push('check_for_update_on_startup = false');
-            // Disable analytics / telemetry in the embedded context.
             lines.push('');
             lines.push('[analytics]');
             lines.push('enabled = false');
 
-            const configToml = lines.join('\n') + '\n';
+            // ── Preserve user preferences from existing config ──
             const configFile = path.join(codexHomeDir, 'config.toml');
+            let userConfig = '';
+            if (fs.existsSync(configFile)) {
+                try {
+                    userConfig = preserveUserConfig(fs.readFileSync(configFile, 'utf-8'));
+                } catch (e) {
+                    console.warn(`[ToolManager] Failed to read existing config.toml, starting fresh:`, e);
+                }
+            }
+
+            const configToml = lines.join('\n') + '\n' + userConfig;
             fs.writeFileSync(configFile, configToml, 'utf-8');
             console.log(`[ToolManager] Wrote Codex config to ${configFile}`);
 

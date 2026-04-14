@@ -421,6 +421,19 @@ export class AppUpdater {
                 }
             }
 
+            // Compare ccEffortLevel
+            if (remoteConfig.ccEffortLevel !== undefined) {
+                const local = (this.configStore.get('ccEffortLevel') as string) || '';
+                if (local !== remoteConfig.ccEffortLevel) {
+                    changes.push({
+                        key: 'Claude Code Effort Level',
+                        configKey: 'ccEffortLevel',
+                        oldValue: local || '(未设置)',
+                        newValue: remoteConfig.ccEffortLevel,
+                    });
+                }
+            }
+
             console.log(`[AppUpdater] Remote config check: ${changes.length} change(s) found`);
             return { hasChanges: changes.length > 0, changes, remoteConfig };
         } catch (err) {
@@ -445,6 +458,9 @@ export class AppUpdater {
         }
         if (remoteConfig.codexVerbosity !== undefined) {
             this.configStore.set('codexVerbosity', remoteConfig.codexVerbosity);
+        }
+        if (remoteConfig.ccEffortLevel !== undefined) {
+            this.configStore.set('ccEffortLevel', remoteConfig.ccEffortLevel);
         }
         console.log('[AppUpdater] Remote config applied successfully');
     }
