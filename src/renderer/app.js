@@ -367,6 +367,7 @@ function setupAppUpdateButton() {
         if (pendingUpdate) {
             isWorking = true;
             statusText.textContent = '正在测速...';
+            btn.classList.remove('updatable');
             btn.classList.add('updating');
 
             try {
@@ -377,14 +378,16 @@ function setupAppUpdateButton() {
                     statusText.textContent = '下载失败';
                     console.error('Download failed:', result.error);
                     setTimeout(() => {
-                        statusText.textContent = `更新 v${pendingUpdate?.latestVersion}`;
+                        statusText.textContent = '点击更新';
+                        btn.classList.add('updatable');
                     }, 3000);
                 }
             } catch (err) {
                 statusText.textContent = '下载失败';
                 console.error('Download error:', err);
                 setTimeout(() => {
-                    statusText.textContent = `更新 v${pendingUpdate?.latestVersion}`;
+                    statusText.textContent = '点击更新';
+                    btn.classList.add('updatable');
                 }, 3000);
             } finally {
                 isWorking = false;
@@ -403,7 +406,7 @@ function setupAppUpdateButton() {
                 pendingUpdate = { downloadUrl: result.downloadUrl, latestVersion: result.latestVersion };
                 statusText.textContent = '点击更新';
                 btn.title = `${result.currentVersion} → ${result.latestVersion}`;
-                btn.classList.add('has-update');
+                btn.classList.add('updatable');
             } else if (result.hasUpdate) {
                 statusText.textContent = `新版本 v${result.latestVersion}`;
                 btn.title = '未找到下载文件，请前往 GitHub 手动下载';
@@ -427,7 +430,7 @@ function setupAppUpdateButton() {
             pendingUpdate = { downloadUrl: result.downloadUrl, latestVersion: result.latestVersion };
             statusText.textContent = '点击更新';
             btn.title = `${result.currentVersion} → ${result.latestVersion}`;
-            btn.classList.add('has-update');
+            btn.classList.add('updatable');
         }
     }).catch(() => { /* ignore startup check failures */ });
 }
