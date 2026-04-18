@@ -187,8 +187,14 @@ export class ToolManager {
     private getBundledToolScript(toolId: string): string | null {
         const toolDir = this.getToolDir(toolId);
         switch (toolId) {
-            case 'claude-code':
-                return path.join(toolDir, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
+            case 'claude-code': {
+                const pkgDir = path.join(toolDir, 'node_modules', '@anthropic-ai', 'claude-code');
+                const candidates = [
+                    path.join(pkgDir, 'cli.js'),
+                    path.join(pkgDir, 'cli-wrapper.cjs'),
+                ];
+                return candidates.find(c => fs.existsSync(c)) || null;
+            }
             case 'codex':
                 return path.join(toolDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
             default:
@@ -592,16 +598,25 @@ export class ToolManager {
         const result = await this.npmInstall(packageName, toolDir);
         if (!result.success) return result;
 
-        // @openai/codex distributes platform binaries via dist-tag versions
-        // (e.g. npm:@openai/codex@0.111.0-win32-x64). Chinese mirrors like
+        // Both Claude Code (≥2.1.113) and Codex distribute platform-specific
+        // native binaries via optional dependencies. Chinese mirrors like
         // npmmirror may lag behind on syncing these. If the platform package
         // is missing after install, retry with the official npm registry.
-        if (toolId === 'codex' && !this.hasCodexPlatformPackage(toolDir)) {
-            console.log('[ToolManager] Codex platform package missing after install, retrying with official registry...');
+        const hasPlatformPkg = toolId === 'claude-code'
+            ? this.hasClaudeCodePlatformPackage(toolDir)
+            : toolId === 'codex'
+                ? this.hasCodexPlatformPackage(toolDir)
+                : true;
+
+        if (!hasPlatformPkg) {
+            console.log(`[ToolManager] ${toolId} platform package missing after install, retrying with official registry...`);
             const fallback = await this.npmInstall(packageName, toolDir, 'https://registry.npmjs.org/');
             if (!fallback.success) return fallback;
 
-            if (!this.hasCodexPlatformPackage(toolDir)) {
+            const hasPlatformPkgRetry = toolId === 'claude-code'
+                ? this.hasClaudeCodePlatformPackage(toolDir)
+                : this.hasCodexPlatformPackage(toolDir);
+            if (!hasPlatformPkgRetry) {
                 return { success: false, error: 'Platform-specific binary still missing after fallback install' };
             }
         }
@@ -648,6 +663,20 @@ export class ToolManager {
                 }
             });
         });
+    }
+
+    private hasClaudeCodePlatformPackage(toolDir: string): boolean {
+        const PLATFORM_PKG: Record<string, Record<string, string>> = {
+            win32:  { x64: 'claude-code-win32-x64', arm64: 'claude-code-win32-arm64' },
+            darwin: { x64: 'claude-code-darwin-x64', arm64: 'claude-code-darwin-arm64' },
+            linux:  { x64: 'claude-code-linux-x64',  arm64: 'claude-code-linux-arm64' },
+        };
+        const pkgName = PLATFORM_PKG[os.platform()]?.[os.arch()];
+        if (!pkgName) return true;
+        const pkgDir = path.join(toolDir, 'node_modules', '@anthropic-ai', pkgName);
+        const exists = fs.existsSync(pkgDir);
+        console.log(`[ToolManager] Claude Code platform package check: ${pkgDir} → ${exists}`);
+        return exists;
     }
 
     private hasCodexPlatformPackage(toolDir: string): boolean {

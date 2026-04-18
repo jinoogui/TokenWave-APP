@@ -198,11 +198,17 @@ function bundleTool(tool) {
     try {
         runBundledNpm(['install', packageSpec], tool.dir);
 
-        // @openai/codex uses dist-tag versions for platform binaries
-        // (e.g. npm:@openai/codex@x.y.z-win32-x64). Mirrors may lag,
+        // Both Claude Code (≥2.1.113) and Codex distribute platform-specific
+        // native binaries via optional dependencies. Mirrors may lag,
         // so fall back to the official registry if the platform package
         // is missing after install.
-        if (tool.name === 'codex' && !hasCodexPlatformPackage(tool.dir)) {
+        const hasPlatformPkg = tool.name === 'claude-code'
+            ? hasClaudeCodePlatformPackage(tool.dir)
+            : tool.name === 'codex'
+                ? hasCodexPlatformPackage(tool.dir)
+                : true;
+
+        if (!hasPlatformPkg) {
             console.log(`   ⚠️  Platform package missing, retrying with official npm registry...`);
             runBundledNpm(
                 ['install', packageSpec, '--registry', 'https://registry.npmjs.org/'],
@@ -216,6 +222,18 @@ function bundleTool(tool) {
         console.error(`   You can manually install it later:`);
         console.error(`   cd ${tool.dir} && npm install ${packageSpec}`);
     }
+}
+
+const CLAUDE_CODE_PLATFORM_PKG = {
+    win32: { x64: 'claude-code-win32-x64', arm64: 'claude-code-win32-arm64' },
+    darwin: { x64: 'claude-code-darwin-x64', arm64: 'claude-code-darwin-arm64' },
+    linux: { x64: 'claude-code-linux-x64', arm64: 'claude-code-linux-arm64' },
+};
+
+function hasClaudeCodePlatformPackage(toolDir) {
+    const pkgName = CLAUDE_CODE_PLATFORM_PKG[platform()]?.[arch()];
+    if (!pkgName) return true;
+    return existsSync(join(toolDir, 'node_modules', '@anthropic-ai', pkgName));
 }
 
 const CODEX_PLATFORM_PKG = {
