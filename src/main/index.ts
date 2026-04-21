@@ -1,4 +1,6 @@
-import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, safeStorage, shell } from 'electron';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { PtyManager } from './pty-manager';
 import { ToolManager } from './tool-manager';
@@ -249,6 +251,28 @@ function setupIPC(): void {
                 });
         } catch {
             return [];
+        }
+    });
+
+    // ===== Clipboard =====
+    // Read an image from the OS clipboard, write it to a temp .png file,
+    // and return the path. Returns null when the clipboard has no image.
+    ipcMain.handle('clipboard:read-image', async () => {
+        try {
+            const image = clipboard.readImage();
+            if (image.isEmpty()) return null;
+            const buf = image.toPNG();
+            if (!buf || buf.length === 0) return null;
+
+            const dir = path.join(os.tmpdir(), '4routerai-paste');
+            fs.mkdirSync(dir, { recursive: true });
+            const filename = `clip-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
+            const filePath = path.join(dir, filename);
+            fs.writeFileSync(filePath, buf);
+            return filePath;
+        } catch (err) {
+            console.error('[clipboard:read-image] failed:', err);
+            return null;
         }
     });
 }

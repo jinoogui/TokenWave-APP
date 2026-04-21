@@ -92,4 +92,10 @@ contextBridge.exposeInMainWorld('routerAi', {
     fs: {
         readDir: (dirPath: string) => ipcRenderer.invoke('fs:read-dir', dirPath),
     },
+
+    // ===== Clipboard =====
+    clipboard: {
+        // Returns a temp file path for an image in the clipboard, or null.
+        readImage: () => ipcRenderer.invoke('clipboard:read-image') as Promise<string | null>,
+    },
 });

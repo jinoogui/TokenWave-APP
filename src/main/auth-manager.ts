@@ -21,7 +21,7 @@ export interface LoginResult {
  * After successful login, obtains and stores the accessToken.
  *
  * Detection strategy: poll the WebView's session cookies every few seconds.
- * When cookies exist, try calling GET /api/user/self/token.
+ * When cookies exist, try calling GET /api/user/token.
  * If the API returns an accessToken, login is confirmed — no need to
  * guess based on URL navigation (which is unreliable with SPAs and can
  * fire false-positives when the user simply browses to the home page).
@@ -78,7 +78,7 @@ export class AuthManager {
             this.loginWindow.loadURL(`${ROUTER_BASE_URL}/login`);
 
             // 4. Poll cookies to detect login success
-            //    Every POLL_INTERVAL ms, grab cookies → try /api/user/self/token.
+            //    Every POLL_INTERVAL ms, grab cookies → try /api/user/token.
             //    This works regardless of SPA navigation, 2FA, OAuth, etc.
             let polling = false; // guard against overlapping polls
             const pollLoginStatus = async () => {
@@ -145,7 +145,7 @@ export class AuthManager {
     }
 
     /**
-     * Use session cookies to call GET /api/user/self/token.
+     * Use session cookies to call GET /api/user/token.
      * This endpoint generates/returns the accessToken.
      * Throws on failure (not logged in, network error, etc.).
      */

@@ -37,8 +37,7 @@ const $ = (/** @type {string} */ sel) => document.querySelector(sel);
 const welcomeScreen = /** @type {HTMLElement} */ ($('#welcome-screen'));
 const appScreen = /** @type {HTMLElement} */ ($('#app-screen'));
 const tabBar = /** @type {HTMLElement} */ ($('#tab-bar'));
-const tabBarEmpty = /** @type {HTMLElement} */ ($('#tab-bar-empty'));
-const terminalContainer = /** @type {HTMLElement} */ ($('#terminal-container'));
+const tabBarEmpty = /** @type {HTMLElement} */ ($('#tab-bar-empty'));const terminalContainer = /** @type {HTMLElement} */ ($('#terminal-container'));
 const emptyState = /** @type {HTMLElement} */ ($('#empty-state'));
 const settingsModal = /** @type {HTMLElement} */ ($('#settings-modal'));
 const cwdDisplay = /** @type {HTMLElement} */ ($('#cwd-display'));
@@ -542,6 +541,44 @@ async function launchTerminal() {
     }
 }
 
+// ===== Clipboard Paste Helper =====
+/**
+ * Paste clipboard contents into the PTY.
+ * Falls back to image (saved as temp file, path sent wrapped in bracketed
+ * paste markers) when the clipboard has no text.
+ * @param {string} sessionId
+ */
+async function pasteFromClipboard(sessionId) {
+    try {
+        // Try text first — covers normal text paste and mixed text+image clipboards
+        // (where the user meant to paste the text).
+        let text = '';
+        try {
+            text = await navigator.clipboard.readText();
+        } catch {
+            text = '';
+        }
+        if (text) {
+            api.pty.write(sessionId, text);
+            return;
+        }
+
+        // No text — try an image. Main process writes a temp .png and returns the path.
+        const imagePath = await api.clipboard?.readImage?.();
+        if (imagePath) {
+            // Wrap in bracketed paste markers so Claude Code CLI's paste handler
+            // treats it as a paste and its `isImageFilePath` check resolves the
+            // path to an image attachment. Prefixed with a space to match the
+            // CLI's path-after-space splitter.
+            const BRACKET_PASTE_START = '\x1b[200~';
+            const BRACKET_PASTE_END = '\x1b[201~';
+            api.pty.write(sessionId, `${BRACKET_PASTE_START} ${imagePath}${BRACKET_PASTE_END}`);
+        }
+    } catch (err) {
+        console.error('[pasteFromClipboard] failed:', err);
+    }
+}
+
 // ===== Tab Management =====
 function createTab(
   /** @type {string} */ toolId,
@@ -594,8 +631,7 @@ function createTab(
                 setTimeout(() => { btn.textContent = '📋 Copy'; }, 1000);
             }
         } else if (action === 'paste') {
-            const text = await navigator.clipboard.readText();
-            if (text) api.pty.write(sessionId, text);
+            await pasteFromClipboard(sessionId);
             terminal.focus();
         }
     });
@@ -619,12 +655,10 @@ function createTab(
             }
             return false; // never send Ctrl+C to PTY
         }
-        // Ctrl+V: paste from clipboard
+        // Ctrl+V: paste from clipboard (text or image)
         if (e.ctrlKey && (e.code === 'KeyV' || e.key === 'v' || e.key === 'V')) {
             e.preventDefault();
-            navigator.clipboard.readText().then((text) => {
-                if (text) api.pty.write(sessionId, text);
-            });
+            pasteFromClipboard(sessionId);
             return false;
         }
         return true;
