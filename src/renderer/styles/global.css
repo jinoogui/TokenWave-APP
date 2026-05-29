@@ -893,6 +893,22 @@ input {
     display: none;
 }
 
+.terminal-wrapper.drop-target::after {
+    content: '拖放图片以附加';
+    position: absolute;
+    inset: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed var(--accent, #58a6ff);
+    border-radius: 8px;
+    background: rgba(88, 166, 255, 0.08);
+    color: var(--accent, #58a6ff);
+    font-size: 14px;
+    pointer-events: none;
+    z-index: 10;
+}
+
 .empty-state {
     position: absolute;
     inset: 0;

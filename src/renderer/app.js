@@ -70,6 +70,7 @@ function refitTerminal(/** @type {TabState} */ tab, /** @type {{ focus?: boolean
 async function init() {
     setupWindowControls();
     setupToggleVisibility();
+    setupGlobalDropGuard();
     await checkFirstLaunch();
     await applyTheme();
     setupWelcomeScreen();
@@ -147,6 +148,15 @@ function setupWindowControls() {
     $('#btn-minimize')?.addEventListener('click', () => api.window.minimize());
     $('#btn-maximize')?.addEventListener('click', () => api.window.maximize());
     $('#btn-close')?.addEventListener('click', () => api.window.close());
+}
+
+// Suppress Electron's default file-drop navigation outside the terminal.
+// Without this, dropping a file anywhere in the window replaces the page
+// with file:// content. Terminal-wrappers re-enable drop via preventDefault
+// in their own dragover/drop handlers.
+function setupGlobalDropGuard() {
+    window.addEventListener('dragover', (e) => { e.preventDefault(); }, false);
+    window.addEventListener('drop', (e) => { e.preventDefault(); }, false);
 }
 
 // ===== Toggle Password Visibility =====
@@ -543,6 +553,18 @@ async function launchTerminal() {
 
 // ===== Clipboard Paste Helper =====
 /**
+ * Send an image file path to the PTY using xterm bracketed-paste markers,
+ * matching how Claude Code's CLI detects pasted image attachments.
+ * @param {string} sessionId
+ * @param {string} imagePath
+ */
+function writeImagePathToPty(sessionId, imagePath) {
+    const BRACKET_PASTE_START = '\x1b[200~';
+    const BRACKET_PASTE_END = '\x1b[201~';
+    api.pty.write(sessionId, `${BRACKET_PASTE_START} ${imagePath}${BRACKET_PASTE_END}`);
+}
+
+/**
  * Paste clipboard contents into the PTY.
  * Falls back to image (saved as temp file, path sent wrapped in bracketed
  * paste markers) when the clipboard has no text.
@@ -566,16 +588,32 @@ async function pasteFromClipboard(sessionId) {
         // No text — try an image. Main process writes a temp .png and returns the path.
         const imagePath = await api.clipboard?.readImage?.();
         if (imagePath) {
-            // Wrap in bracketed paste markers so Claude Code CLI's paste handler
-            // treats it as a paste and its `isImageFilePath` check resolves the
-            // path to an image attachment. Prefixed with a space to match the
-            // CLI's path-after-space splitter.
-            const BRACKET_PASTE_START = '\x1b[200~';
-            const BRACKET_PASTE_END = '\x1b[201~';
-            api.pty.write(sessionId, `${BRACKET_PASTE_START} ${imagePath}${BRACKET_PASTE_END}`);
+            writeImagePathToPty(sessionId, imagePath);
         }
     } catch (err) {
         console.error('[pasteFromClipboard] failed:', err);
+    }
+}
+
+/**
+ * Forward dropped image files into the active PTY using the same
+ * bracketed-paste path as the clipboard image flow.
+ * @param {string} sessionId
+ * @param {FileList | File[]} files
+ */
+async function dropImagesToPty(sessionId, files) {
+    const list = Array.from(files || []).filter((f) => f.type.startsWith('image/'));
+    if (list.length === 0) return;
+    for (const file of list) {
+        try {
+            const buf = await file.arrayBuffer();
+            const ext = (file.name.split('.').pop() || '').toLowerCase()
+                || (file.type.split('/')[1] || 'png');
+            const path = await api.clipboard?.saveDroppedImage?.(buf, ext);
+            if (path) writeImagePathToPty(sessionId, path);
+        } catch (err) {
+            console.error('[dropImagesToPty] failed for', file.name, err);
+        }
     }
 }
 
@@ -608,6 +646,30 @@ function createTab(
     wrapper.id = `terminal-${tabId}`;
     terminalContainer.appendChild(wrapper);
     terminal.open(wrapper);
+
+    // ---- Drag & drop image attachment ----
+    // Override Electron's default behavior of navigating to file:// when an image
+    // is dropped onto the window, and forward the bytes to the PTY instead.
+    wrapper.addEventListener('dragover', (e) => {
+        if (!e.dataTransfer) return;
+        const hasFile = Array.from(e.dataTransfer.items || []).some((it) => it.kind === 'file');
+        if (!hasFile) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        wrapper.classList.add('drop-target');
+    });
+    wrapper.addEventListener('dragleave', () => {
+        wrapper.classList.remove('drop-target');
+    });
+    wrapper.addEventListener('drop', async (e) => {
+        if (!e.dataTransfer) return;
+        wrapper.classList.remove('drop-target');
+        const files = e.dataTransfer.files;
+        if (!files || files.length === 0) return;
+        e.preventDefault();
+        await dropImagesToPty(sessionId, files);
+        terminal.focus();
+    });
 
     // ---- Floating copy/paste toolbar ----
     const toolbar = document.createElement('div');

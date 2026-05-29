@@ -97,5 +97,10 @@ contextBridge.exposeInMainWorld('routerAi', {
     clipboard: {
         // Returns a temp file path for an image in the clipboard, or null.
         readImage: () => ipcRenderer.invoke('clipboard:read-image') as Promise<string | null>,
+        // Persists a dropped image's bytes to a temp file and returns its path.
+        // The renderer reads File bytes via FileReader; the main process owns the FS write
+        // so the path is reachable from the spawned CLI processes.
+        saveDroppedImage: (bytes: ArrayBuffer, ext: string) =>
+            ipcRenderer.invoke('clipboard:save-dropped-image', { bytes, ext }) as Promise<string | null>,
     },
 });

@@ -276,6 +276,28 @@ function setupIPC(): void {
             return null;
         }
     });
+
+    // Save bytes from a dropped image into the same temp directory as
+    // pasted images, then return the path. Mirrors the paste flow so
+    // the renderer can feed both into Claude Code's bracketed-paste
+    // attachment handler.
+    ipcMain.handle('clipboard:save-dropped-image', async (_event, payload: { bytes: ArrayBuffer; ext: string }) => {
+        try {
+            const buf = Buffer.from(payload.bytes);
+            if (buf.length === 0) return null;
+            const safeExt = (payload.ext || 'png').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'png';
+
+            const dir = path.join(os.tmpdir(), '4routerai-paste');
+            fs.mkdirSync(dir, { recursive: true });
+            const filename = `drop-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${safeExt}`;
+            const filePath = path.join(dir, filename);
+            fs.writeFileSync(filePath, buf);
+            return filePath;
+        } catch (err) {
+            console.error('[clipboard:save-dropped-image] failed:', err);
+            return null;
+        }
+    });
 }
 
 app.whenReady().then(() => {
