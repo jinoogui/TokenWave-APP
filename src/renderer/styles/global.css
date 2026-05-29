@@ -902,6 +902,57 @@ body.platform-darwin .titlebar-drag {
     display: none;
 }
 
+/* Editor tabs reuse the absolute-fill layout of terminal wrappers. */
+.editor-wrapper {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.editor-wrapper.hidden {
+    display: none;
+}
+
+.editor-wrapper .cm-editor {
+    height: 100%;
+}
+
+.editor-wrapper .cm-editor.cm-focused {
+    outline: none;
+}
+
+/* Editor tab title + unsaved (dirty) indicator. */
+.tab .tab-title {
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tab .tab-dirty {
+    display: none;
+    color: var(--accent, #58a6ff);
+    font-size: 10px;
+    line-height: 1;
+}
+
+.tab.dirty .tab-dirty {
+    display: inline;
+}
+
+/* When dirty, hide the close × until hover so the dot is visible. */
+.tab.dirty .tab-close {
+    display: none;
+}
+
+.tab.dirty:hover .tab-dirty {
+    display: none;
+}
+
+.tab.dirty:hover .tab-close {
+    display: inline;
+}
+
 .terminal-wrapper.drop-target::after {
     content: '拖放图片以附加';
     position: absolute;
@@ -1303,6 +1354,183 @@ select.text-input {
 
 .tree-children {
     padding-left: 12px;
+}
+
+.tree-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Drag-over highlight on a folder drop target. */
+.tree-item.drop-into {
+    background: rgba(88, 166, 255, 0.18);
+    outline: 1px solid var(--border-accent, #58a6ff);
+    outline-offset: -1px;
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
+/* ===== File tree right-click menu ===== */
+.tree-context-menu {
+    position: fixed;
+    z-index: 2000;
+    min-width: 160px;
+    padding: 4px;
+    background: var(--bg-secondary, #161b22);
+    border: 1px solid var(--border-default, #30363d);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    font-size: 13px;
+    user-select: none;
+}
+
+.tree-menu-item {
+    padding: 7px 12px;
+    border-radius: 5px;
+    cursor: pointer;
+    color: var(--text-primary, #e6edf3);
+    white-space: nowrap;
+}
+
+.tree-menu-item:hover {
+    background: var(--bg-tertiary, #21262d);
+}
+
+.tree-menu-item.danger {
+    color: var(--accent-red, #f85149);
+}
+
+.tree-menu-item.danger:hover {
+    background: rgba(248, 81, 73, 0.12);
+}
+
+/* Separator above an item that begins a new action group. */
+.tree-menu-item.has-sep {
+    margin-top: 4px;
+    border-top: 1px solid var(--border-default, #30363d);
+    padding-top: 8px;
+}
+
+/* ===== Custom dialogs (prompt / confirm) ===== */
+.app-dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(1, 4, 9, 0.6);
+    backdrop-filter: blur(2px);
+}
+
+.app-dialog {
+    width: 360px;
+    max-width: calc(100vw - 48px);
+    padding: 20px;
+    background: var(--bg-secondary, #161b22);
+    border: 1px solid var(--border-default, #30363d);
+    border-radius: 12px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    animation: app-dialog-in 0.12s ease-out;
+}
+
+@keyframes app-dialog-in {
+    from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+}
+
+.app-dialog-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary, #e6edf3);
+    margin-bottom: 14px;
+}
+
+.app-dialog-message {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-primary, #e6edf3);
+    margin-bottom: 18px;
+}
+
+.app-dialog-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 12px;
+    font-size: 13px;
+    color: var(--text-primary, #e6edf3);
+    background: var(--bg-primary, #0d1117);
+    border: 1px solid var(--border-default, #30363d);
+    border-radius: 7px;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.app-dialog-input:focus {
+    border-color: var(--accent, #58a6ff);
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.25);
+}
+
+.app-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 18px;
+}
+
+.app-dialog-btn {
+    padding: 7px 16px;
+    font-size: 13px;
+    border-radius: 7px;
+    border: 1px solid var(--border-default, #30363d);
+    background: var(--bg-tertiary, #21262d);
+    color: var(--text-primary, #e6edf3);
+    cursor: pointer;
+    transition: filter 0.12s ease, background 0.12s ease;
+}
+
+.app-dialog-btn:hover { filter: brightness(1.15); }
+
+.app-dialog-btn.primary {
+    background: var(--accent, #2f81f7);
+    border-color: var(--accent, #2f81f7);
+    color: #fff;
+}
+
+.app-dialog-btn.danger {
+    background: var(--accent-red, #da3633);
+    border-color: var(--accent-red, #da3633);
+    color: #fff;
+}
+
+/* ===== Toast ===== */
+.app-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%) translateY(12px);
+    z-index: 4000;
+    padding: 9px 18px;
+    font-size: 13px;
+    color: #fff;
+    background: rgba(36, 41, 47, 0.96);
+    border: 1px solid var(--border-default, #30363d);
+    border-radius: 20px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.app-toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+.app-toast.error {
+    background: rgba(248, 81, 73, 0.96);
+    border-color: #f85149;
 }
 
 /* ===== Responsive ===== */

@@ -114,6 +114,20 @@ contextBridge.exposeInMainWorld('routerAi', {
     // ===== File System =====
     fs: {
         readDir: (dirPath: string) => ipcRenderer.invoke('fs:read-dir', dirPath),
+        readFile: (filePath: string) =>
+            ipcRenderer.invoke('fs:read-file', filePath) as Promise<{ success: boolean; content?: string; error?: string }>,
+        writeFile: (filePath: string, content: string) =>
+            ipcRenderer.invoke('fs:write-file', filePath, content) as Promise<{ success: boolean; error?: string }>,
+        createFile: (dirPath: string, name: string) =>
+            ipcRenderer.invoke('fs:create-file', dirPath, name) as Promise<{ success: boolean; path?: string; error?: string }>,
+        createDir: (dirPath: string, name: string) =>
+            ipcRenderer.invoke('fs:create-dir', dirPath, name) as Promise<{ success: boolean; path?: string; error?: string }>,
+        rename: (oldPath: string, newName: string) =>
+            ipcRenderer.invoke('fs:rename', oldPath, newName) as Promise<{ success: boolean; path?: string; error?: string }>,
+        delete: (targetPath: string) =>
+            ipcRenderer.invoke('fs:delete', targetPath) as Promise<{ success: boolean; error?: string }>,
+        move: (srcPath: string, destDir: string) =>
+            ipcRenderer.invoke('fs:move', srcPath, destDir) as Promise<{ success: boolean; path?: string; error?: string }>,
     },
 
     // ===== Clipboard =====

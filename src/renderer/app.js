@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import QRCode from 'qrcode';
+import { createEditor } from './editor.js';
 
 // ============================================================
 // 4RouterAi — Main Renderer Application
@@ -22,12 +23,16 @@ const state = {
 /**
  * @typedef {Object} TabState
  * @property {string} id
+ * @property {'terminal'|'editor'} kind
  * @property {string} toolId
  * @property {string} toolName
  * @property {string} toolIcon
- * @property {string} sessionId
- * @property {Terminal} terminal
- * @property {FitAddon} fitAddon
+ * @property {string} [sessionId]
+ * @property {Terminal} [terminal]
+ * @property {FitAddon} [fitAddon]
+ * @property {import('@codemirror/view').EditorView} [editor]
+ * @property {string} [filePath]
+ * @property {boolean} [dirty]
  * @property {HTMLElement} wrapper
  * @property {HTMLElement} tabElement
  * @property {string} cwd
@@ -892,6 +897,7 @@ function createTab(
 
     const tabState = {
         id: tabId,
+        kind: /** @type {'terminal'} */ ('terminal'),
         toolId,
         toolName,
         toolIcon,
@@ -910,6 +916,90 @@ function createTab(
     emptyState.classList.add('hidden');
 }
 
+// ===== Editor Tabs =====
+// Open a file in a CodeMirror editor tab. Reuses the existing tab if the same
+// file is already open; otherwise loads the file via IPC and mounts an editor.
+async function openFileInEditor(/** @type {string} */ filePath, /** @type {string} */ fileName) {
+    const existing = state.tabs.find(t => t.kind === 'editor' && t.filePath === filePath);
+    if (existing) {
+        activateTab(existing.id);
+        return;
+    }
+
+    const res = await api.fs.readFile(filePath);
+    if (!res?.success) {
+        toast(res?.error || '无法打开文件', 'error');
+        return;
+    }
+
+    const tabId = `tab-${++state.tabCounter}`;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'editor-wrapper';
+    wrapper.id = `editor-${tabId}`;
+    terminalContainer.appendChild(wrapper);
+
+    const tabEl = document.createElement('div');
+    tabEl.className = 'tab';
+    tabEl.setAttribute('data-tab-id', tabId);
+    tabEl.innerHTML = `
+    <span>📄</span>
+    <span class="tab-title">${escapeHtml(fileName)}</span>
+    <span class="tab-dirty" title="未保存">●</span>
+    <span class="tab-close" title="关闭">&times;</span>
+  `;
+    tabEl.addEventListener('click', (e) => {
+        if (/** @type {HTMLElement} */(e.target)?.closest('.tab-close')) {
+            closeTab(tabId);
+        } else {
+            activateTab(tabId);
+        }
+    });
+    tabBar.appendChild(tabEl);
+
+    const tabState = {
+        id: tabId,
+        kind: /** @type {'editor'} */ ('editor'),
+        toolId: 'editor',
+        toolName: fileName,
+        toolIcon: '📄',
+        filePath,
+        dirty: false,
+        wrapper,
+        tabElement: tabEl,
+        cwd: state.currentCwd || '',
+    };
+
+    const markDirty = () => {
+        if (!tabState.dirty) {
+            tabState.dirty = true;
+            tabEl.classList.add('dirty');
+        }
+    };
+    const doSave = () => saveEditorTab(tabState);
+
+    const editor = createEditor(wrapper, fileName, res.content || '', markDirty, doSave);
+    tabState.editor = editor;
+
+    state.tabs.push(tabState);
+    activateTab(tabId);
+    tabBarEmpty.classList.add('hidden');
+    emptyState.classList.add('hidden');
+}
+
+async function saveEditorTab(/** @type {TabState} */ tabState) {
+    if (tabState.kind !== 'editor' || !tabState.editor || !tabState.filePath) return;
+    const content = tabState.editor.state.doc.toString();
+    const res = await api.fs.writeFile(tabState.filePath, content);
+    if (res?.success) {
+        tabState.dirty = false;
+        tabState.tabElement.classList.remove('dirty');
+        toast('已保存');
+    } else {
+        toast(res?.error || '保存失败', 'error');
+    }
+}
+
 function activateTab(/** @type {string} */ tabId) {
     state.activeTabId = tabId;
 
@@ -918,7 +1008,11 @@ function activateTab(/** @type {string} */ tabId) {
         tab.tabElement.classList.toggle('active', isActive);
         tab.wrapper.classList.toggle('hidden', !isActive);
         if (isActive) {
-            refitTerminal(tab, { focus: true });
+            if (tab.kind === 'terminal') {
+                refitTerminal(tab, { focus: true });
+            } else if (tab.kind === 'editor' && tab.editor) {
+                tab.editor.focus();
+            }
             // Refresh file explorer for this tab's CWD
             if (tab.cwd) {
                 loadFileTree(tab.cwd);
@@ -932,8 +1026,16 @@ function closeTab(/** @type {string} */ tabId) {
     if (idx === -1) return;
 
     const tab = state.tabs[idx];
-    api.pty.destroy(tab.sessionId);
-    tab.terminal.dispose();
+
+    if (tab.kind === 'editor') {
+        if (tab.dirty && !confirm(`「${tab.toolName}」有未保存的修改，确定关闭吗？`)) {
+            return;
+        }
+        tab.editor?.destroy();
+    } else {
+        if (tab.sessionId) api.pty.destroy(tab.sessionId);
+        tab.terminal?.dispose();
+    }
     tab.wrapper.remove();
     tab.tabElement.remove();
     state.tabs.splice(idx, 1);
@@ -1598,52 +1700,424 @@ function setupFileExplorer() {
             loadFileTree(state.currentCwd);
         }
     });
+
+    // Right-click on empty space in the tree → act on the explorer root.
+    fileTree.addEventListener('contextmenu', (e) => {
+        if (/** @type {HTMLElement} */ (e.target)?.closest('.tree-item')) return;
+        e.preventDefault();
+        if (explorerRoot) showTreeContextMenu(e, null);
+    });
+
+    // Dismiss the context menu on any outside click, scroll, or Escape.
+    document.addEventListener('click', closeTreeContextMenu);
+    document.addEventListener('contextmenu', (e) => {
+        if (!(/** @type {HTMLElement} */ (e.target)?.closest('#file-tree'))) closeTreeContextMenu();
+    });
+    window.addEventListener('blur', closeTreeContextMenu);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeTreeContextMenu(); });
 }
+
+// Tracks which directory paths are currently expanded, so a refresh after a
+// create/delete/rename/move doesn't collapse the whole tree.
+const expandedDirs = new Set();
+// Root directory currently shown in the explorer (used by blank-area actions).
+let explorerRoot = '';
+// Monotonic token: guards against two concurrent loadFileTree() calls both
+// clearing and appending, which would render duplicate entries.
+let fileTreeLoadToken = 0;
 
 async function loadFileTree(/** @type {string} */ dirPath) {
     if (!dirPath || fileExplorer.classList.contains('collapsed')) return;
+    explorerRoot = dirPath;
 
     const parts = dirPath.replace(/\\/g, '/').split('/');
     explorerPath.textContent = parts.slice(-2).join('/');
     explorerPath.title = dirPath;
 
-    fileTree.innerHTML = '';
+    const token = ++fileTreeLoadToken;
     const entries = await api.fs.readDir(dirPath);
-    renderTreeEntries(fileTree, entries);
+    // A newer load started while we awaited — let it win, discard this render.
+    if (token !== fileTreeLoadToken) return;
+    fileTree.innerHTML = '';
+    await renderTreeEntries(fileTree, entries);
 }
 
-function renderTreeEntries(/** @type {HTMLElement} */ container, /** @type {any[]} */ entries) {
+// Re-read and re-render a directory's children in place, preserving the
+// expand/collapse state of everything else in the tree.
+async function refreshDir(/** @type {string} */ dirPath) {
+    // Root: full reload (expandedDirs is honored during re-render).
+    if (dirPath === explorerRoot) {
+        await loadFileTree(explorerRoot);
+        return;
+    }
+    const childrenEl = fileTree.querySelector(`.tree-children[data-dir="${cssEscape(dirPath)}"]`);
+    if (!childrenEl) return;
+    const subEntries = await api.fs.readDir(dirPath);
+    childrenEl.innerHTML = '';
+    await renderTreeEntries(childrenEl, subEntries);
+}
+
+function cssEscape(/** @type {string} */ s) {
+    if (window.CSS && CSS.escape) return CSS.escape(s);
+    return s.replace(/["\\]/g, '\\$&');
+}
+
+async function renderTreeEntries(/** @type {HTMLElement} */ container, /** @type {any[]} */ entries) {
     for (const entry of entries) {
         const item = document.createElement('div');
         item.className = 'tree-item';
-        item.innerHTML = `<span class="icon">${entry.isDirectory ? '📂' : '📄'}</span><span>${entry.name}</span>`;
+        item.setAttribute('data-path', entry.path);
+        item.setAttribute('data-dir', entry.isDirectory ? '1' : '0');
+        item.setAttribute('draggable', 'true');
+        item.innerHTML = `<span class="icon">${entry.isDirectory ? '📂' : '📄'}</span><span class="tree-label">${escapeHtml(entry.name)}</span>`;
+
+        attachDragHandlers(item, entry);
+        item.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showTreeContextMenu(e, entry);
+        });
 
         if (entry.isDirectory) {
             const wrapper = document.createElement('div');
             const children = document.createElement('div');
             children.className = 'tree-children';
-            children.style.display = 'none';
-            let loaded = false;
+            children.setAttribute('data-dir', entry.path);
+
+            const isExpanded = expandedDirs.has(entry.path);
+            children.style.display = isExpanded ? 'block' : 'none';
+            if (isExpanded) {
+                const subEntries = await api.fs.readDir(entry.path);
+                await renderTreeEntries(children, subEntries);
+            }
 
             item.addEventListener('click', async () => {
-                if (!loaded) {
-                    const subEntries = await api.fs.readDir(entry.path);
-                    renderTreeEntries(children, subEntries);
-                    loaded = true;
+                const open = children.style.display !== 'none';
+                if (open) {
+                    children.style.display = 'none';
+                    expandedDirs.delete(entry.path);
+                } else {
+                    if (!children.childElementCount) {
+                        const subEntries = await api.fs.readDir(entry.path);
+                        await renderTreeEntries(children, subEntries);
+                    }
+                    children.style.display = 'block';
+                    expandedDirs.add(entry.path);
                 }
-                const isOpen = children.style.display !== 'none';
-                children.style.display = isOpen ? 'none' : 'block';
-                item.querySelector('.icon').textContent = isOpen ? '📂' : '📂';
             });
 
             wrapper.appendChild(item);
             wrapper.appendChild(children);
             container.appendChild(wrapper);
         } else {
+            item.addEventListener('click', () => {
+                openFileInEditor(entry.path, entry.name);
+            });
             container.appendChild(item);
         }
     }
 }
+
+// ===== Custom dialogs & toast =====
+// Lightweight in-app replacements for window.prompt/alert/confirm so the
+// file-tree flows match the app's dark UI instead of native OS chrome.
+
+function dialogBackdrop() {
+    const back = document.createElement('div');
+    back.className = 'app-dialog-backdrop';
+    return back;
+}
+
+/**
+ * Themed text-input dialog. Resolves to the trimmed string, or null if the
+ * user cancels (Esc / backdrop / 取消).
+ * @returns {Promise<string|null>}
+ */
+function promptDialog(/** @type {string} */ title, /** @type {string} */ initial = '', /** @type {string} */ okText = '确定') {
+    return new Promise((resolve) => {
+        const back = dialogBackdrop();
+        back.innerHTML = `
+      <div class="app-dialog">
+        <div class="app-dialog-title">${escapeHtml(title)}</div>
+        <input class="app-dialog-input" type="text" value="${escapeHtml(initial)}" />
+        <div class="app-dialog-actions">
+          <button class="app-dialog-btn cancel">取消</button>
+          <button class="app-dialog-btn primary">${escapeHtml(okText)}</button>
+        </div>
+      </div>`;
+        document.body.appendChild(back);
+        const input = /** @type {HTMLInputElement} */ (back.querySelector('.app-dialog-input'));
+        const done = (/** @type {string|null} */ v) => { back.remove(); resolve(v); };
+        input.focus();
+        input.select();
+        back.querySelector('.cancel')?.addEventListener('click', () => done(null));
+        back.querySelector('.primary')?.addEventListener('click', () => {
+            const v = input.value.trim();
+            done(v || null);
+        });
+        back.addEventListener('mousedown', (e) => { if (e.target === back) done(null); });
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { const v = input.value.trim(); done(v || null); }
+            else if (e.key === 'Escape') done(null);
+        });
+    });
+}
+
+/** Themed confirm dialog. Resolves true/false. */
+function confirmDialog(/** @type {string} */ message, /** @type {boolean} */ danger = false) {
+    return new Promise((resolve) => {
+        const back = dialogBackdrop();
+        back.innerHTML = `
+      <div class="app-dialog">
+        <div class="app-dialog-message">${escapeHtml(message)}</div>
+        <div class="app-dialog-actions">
+          <button class="app-dialog-btn cancel">取消</button>
+          <button class="app-dialog-btn ${danger ? 'danger' : 'primary'}">确定</button>
+        </div>
+      </div>`;
+        document.body.appendChild(back);
+        const done = (/** @type {boolean} */ v) => { back.remove(); resolve(v); };
+        /** @type {HTMLElement} */ (back.querySelector('.cancel'))?.focus();
+        back.querySelector('.cancel')?.addEventListener('click', () => done(false));
+        back.querySelector('.app-dialog-btn:not(.cancel)')?.addEventListener('click', () => done(true));
+        back.addEventListener('mousedown', (e) => { if (e.target === back) done(false); });
+        back.addEventListener('keydown', (e) => { if (e.key === 'Escape') done(false); });
+    });
+}
+
+let toastTimer = null;
+/** Brief non-blocking notification at the bottom of the window. */
+function toast(/** @type {string} */ message, /** @type {'info'|'error'} */ kind = 'info') {
+    let el = document.getElementById('app-toast');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'app-toast';
+        document.body.appendChild(el);
+    }
+    el.textContent = message;
+    el.className = `app-toast show ${kind}`;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.className = 'app-toast'; }, 2200);
+}
+
+// ===== File Tree: context menu =====
+let treeMenuEl = null;
+
+function closeTreeContextMenu() {
+    if (treeMenuEl) {
+        treeMenuEl.remove();
+        treeMenuEl = null;
+    }
+}
+
+// Show the right-click menu for a tree entry. `entry` is null when the user
+// right-clicks empty space (act on the explorer root).
+function showTreeContextMenu(/** @type {MouseEvent} */ e, /** @type {any} */ entry) {
+    closeTreeContextMenu();
+    const menu = document.createElement('div');
+    menu.className = 'tree-context-menu';
+
+    // The directory in which "new file/folder" should be created:
+    // the entry itself if it's a folder, else its parent, else the root.
+    const targetDir = entry
+        ? (entry.isDirectory ? entry.path : parentDir(entry.path))
+        : explorerRoot;
+
+    /** @type {Array<{label:string, danger?:boolean, sep?:boolean, action:()=>void}>} */
+    const items = [
+        { label: '📄 新建文件', action: () => createEntryFlow(targetDir, false) },
+        { label: '📁 新建文件夹', action: () => createEntryFlow(targetDir, true) },
+    ];
+    if (entry) {
+        items.push({ label: '✏️ 重命名', action: () => renameEntryFlow(entry) });
+        items.push({ label: '🗑️ 删除', danger: true, action: () => deleteEntryFlow(entry) });
+    }
+    // Path/terminal utilities operate on the target directory (entry's folder,
+    // or the explorer root for blank-area clicks).
+    items.push({ label: '⬛ 在终端中打开此目录', sep: true, action: () => openDirInTerminal(targetDir) });
+    items.push({ label: '📋 复制路径', action: () => copyPath(entry ? entry.path : explorerRoot) });
+
+    for (const it of items) {
+        const row = document.createElement('div');
+        row.className = 'tree-menu-item' + (it.danger ? ' danger' : '') + (it.sep ? ' has-sep' : '');
+        row.textContent = it.label;
+        row.addEventListener('click', () => {
+            closeTreeContextMenu();
+            it.action();
+        });
+        menu.appendChild(row);
+    }
+
+    document.body.appendChild(menu);
+    // Position, keeping the menu inside the viewport.
+    const mw = menu.offsetWidth, mh = menu.offsetHeight;
+    const x = Math.min(e.clientX, window.innerWidth - mw - 8);
+    const y = Math.min(e.clientY, window.innerHeight - mh - 8);
+    menu.style.left = `${Math.max(4, x)}px`;
+    menu.style.top = `${Math.max(4, y)}px`;
+    treeMenuEl = menu;
+}
+
+function parentDir(/** @type {string} */ p) {
+    const norm = p.replace(/[\\/]+$/, '');
+    const idx = Math.max(norm.lastIndexOf('/'), norm.lastIndexOf('\\'));
+    return idx > 0 ? norm.slice(0, idx) : norm;
+}
+
+// Open a new terminal tab rooted at `dir`.
+async function openDirInTerminal(/** @type {string} */ dir) {
+    if (!dir) return;
+    try {
+        const sessionId = await api.pty.create('terminal', dir);
+        // Set the cwd first so the new tab records it and activateTab() refreshes
+        // the explorer to this dir. (createTab → activateTab already reloads the
+        // tree; calling loadFileTree again here caused a concurrent double-render.)
+        state.currentCwd = dir;
+        createTab('terminal', 'Terminal', '⬛', sessionId);
+    } catch (err) {
+        toast(`打开终端失败: ${err}`, 'error');
+    }
+}
+
+async function copyPath(/** @type {string} */ p) {
+    if (!p) return;
+    try {
+        await navigator.clipboard.writeText(p);
+        toast('已复制路径');
+    } catch {
+        toast('复制失败', 'error');
+    }
+}
+
+// ===== File Tree: operations =====
+async function createEntryFlow(/** @type {string} */ dir, /** @type {boolean} */ isDir) {
+    const name = await promptDialog(isDir ? '新建文件夹' : '新建文件', '', '创建');
+    if (name == null) return;
+    const res = isDir
+        ? await api.fs.createDir(dir, name)
+        : await api.fs.createFile(dir, name);
+    if (!res?.success) {
+        toast(res?.error || '创建失败', 'error');
+        return;
+    }
+    expandedDirs.add(dir);
+    await refreshDir(dir);
+    if (!isDir && res.path) openFileInEditor(res.path, name);
+}
+
+async function renameEntryFlow(/** @type {any} */ entry) {
+    const newName = await promptDialog('重命名', entry.name, '重命名');
+    if (newName == null || newName === entry.name) return;
+    const res = await api.fs.rename(entry.path, newName);
+    if (!res?.success) {
+        toast(res?.error || '重命名失败', 'error');
+        return;
+    }
+    // Keep open editor tabs consistent with the renamed file.
+    updateTabsForPath(entry.path, res.path, newName, entry.isDirectory);
+    if (entry.isDirectory) {
+        if (expandedDirs.delete(entry.path)) expandedDirs.add(res.path);
+    }
+    await refreshDir(parentDir(entry.path));
+}
+
+async function deleteEntryFlow(/** @type {any} */ entry) {
+    const kind = entry.isDirectory ? '文件夹' : '文件';
+    if (!(await confirmDialog(`确定删除${kind}「${entry.name}」吗？此操作不可撤销。`, true))) return;
+    const res = await api.fs.delete(entry.path);
+    if (!res?.success) {
+        toast(res?.error || '删除失败', 'error');
+        return;
+    }
+    closeTabsUnderPath(entry.path, entry.isDirectory);
+    expandedDirs.delete(entry.path);
+    await refreshDir(parentDir(entry.path));
+}
+
+// When a file/dir is renamed or moved, fix up any open editor tabs so their
+// filePath and title stay correct (and dirty edits aren't silently orphaned).
+function updateTabsForPath(/** @type {string} */ oldPath, /** @type {string} */ newPath, /** @type {string} */ newName, /** @type {boolean} */ isDir) {
+    for (const tab of state.tabs) {
+        if (tab.kind !== 'editor' || !tab.filePath) continue;
+        if (isDir) {
+            if (tab.filePath.startsWith(oldPath + '/') || tab.filePath.startsWith(oldPath + '\\')) {
+                tab.filePath = newPath + tab.filePath.slice(oldPath.length);
+            }
+        } else if (tab.filePath === oldPath) {
+            tab.filePath = newPath;
+            tab.toolName = newName;
+            const titleEl = tab.tabElement.querySelector('.tab-title');
+            if (titleEl) titleEl.textContent = newName;
+        }
+    }
+}
+
+// Close editor tabs whose file was deleted (or lived under a deleted folder).
+function closeTabsUnderPath(/** @type {string} */ targetPath, /** @type {boolean} */ isDir) {
+    for (const tab of [...state.tabs]) {
+        if (tab.kind !== 'editor' || !tab.filePath) continue;
+        const match = isDir
+            ? (tab.filePath === targetPath || tab.filePath.startsWith(targetPath + '/') || tab.filePath.startsWith(targetPath + '\\'))
+            : tab.filePath === targetPath;
+        if (match) {
+            tab.editor?.destroy();
+            tab.wrapper.remove();
+            tab.tabElement.remove();
+            const idx = state.tabs.indexOf(tab);
+            if (idx !== -1) state.tabs.splice(idx, 1);
+            if (state.activeTabId === tab.id) state.activeTabId = null;
+        }
+    }
+    if (!state.activeTabId && state.tabs.length) activateTab(state.tabs[state.tabs.length - 1].id);
+    if (!state.tabs.length) {
+        tabBarEmpty.classList.remove('hidden');
+        emptyState.classList.remove('hidden');
+    }
+}
+
+// ===== File Tree: drag & drop move =====
+let dragSrc = null;
+
+function attachDragHandlers(/** @type {HTMLElement} */ item, /** @type {any} */ entry) {
+    item.addEventListener('dragstart', (e) => {
+        dragSrc = entry;
+        e.dataTransfer?.setData('text/plain', entry.path);
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+        e.stopPropagation();
+    });
+    item.addEventListener('dragend', () => {
+        dragSrc = null;
+        document.querySelectorAll('.tree-item.drop-into').forEach(el => el.classList.remove('drop-into'));
+    });
+
+    if (!entry.isDirectory) return; // only folders are drop targets
+    item.addEventListener('dragover', (e) => {
+        if (!dragSrc || dragSrc.path === entry.path) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        item.classList.add('drop-into');
+    });
+    item.addEventListener('dragleave', () => item.classList.remove('drop-into'));
+    item.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        item.classList.remove('drop-into');
+        const src = dragSrc;
+        dragSrc = null;
+        if (!src || src.path === entry.path) return;
+        const res = await api.fs.move(src.path, entry.path);
+        if (!res?.success) {
+            toast(res?.error || '移动失败', 'error');
+            return;
+        }
+        updateTabsForPath(src.path, res.path, src.name, src.isDirectory);
+        if (src.isDirectory && expandedDirs.delete(src.path)) expandedDirs.add(res.path);
+        expandedDirs.add(entry.path);
+        await refreshDir(parentDir(src.path));
+        await refreshDir(entry.path);
+    });
+}
+
 // ===== Remote Config Sync =====
 function checkRemoteConfigOnStartup() {
     api.app.checkRemoteConfig().then((/** @type {any} */ result) => {

@@ -1,6 +1,6 @@
 {
     "name": "tokenwave",
-    "version": "1.1.8",
+    "version": "1.1.9",
     "description": "All-in-one AI coding assistant — Claude Code & Codex in a single app",
     "engines": {
         "node": ">=20"
@@ -15,6 +15,7 @@
         "build:renderer": "vite build",
         "bundle-tools": "node scripts/bundle-tools.mjs",
         "package": "npm run build && npm run bundle-tools && electron-builder --win",
+        "package:mac": "npm run build && npm run bundle-tools && electron-builder --mac --arm64",
         "start": "electron .",
         "rebuild-pty": "electron-rebuild -f -w node-pty"
     },
@@ -32,10 +33,18 @@
         "vite": "^6.0.0"
     },
     "dependencies": {
+        "@codemirror/lang-css": "^6.3.1",
+        "@codemirror/lang-html": "^6.4.11",
+        "@codemirror/lang-javascript": "^6.2.5",
+        "@codemirror/lang-json": "^6.0.2",
+        "@codemirror/lang-markdown": "^6.5.0",
+        "@codemirror/lang-python": "^6.2.1",
+        "@codemirror/theme-one-dark": "^6.1.3",
         "@xterm/addon-fit": "^0.10.0",
         "@xterm/addon-unicode11": "^0.8.0",
         "@xterm/addon-web-links": "^0.11.0",
         "@xterm/xterm": "^5.5.0",
+        "codemirror": "^6.0.2",
         "electron-store": "^8.2.0",
         "node-pty": "^1.0.0",
         "qrcode": "^1.5.4"
@@ -67,6 +76,31 @@
                         "arm64",
                         "x64"
                     ]
+                }
+            ]
+        },
+        "dmg": {
+            "window": {
+                "width": 540,
+                "height": 400
+            },
+            "contents": [
+                {
+                    "x": 140,
+                    "y": 170,
+                    "type": "file"
+                },
+                {
+                    "x": 400,
+                    "y": 170,
+                    "type": "link",
+                    "path": "/Applications"
+                },
+                {
+                    "x": 270,
+                    "y": 330,
+                    "type": "file",
+                    "path": "resources/dmg/安装说明-必读.txt"
                 }
             ]
         },

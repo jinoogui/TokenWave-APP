@@ -28,6 +28,18 @@ function getResourcesPath(): string {
     return path.join(__dirname, '..', '..', 'resources', 'bundled-tools');
 }
 
+// Validate a user-supplied file/folder name: reject empty, path separators,
+// traversal, and characters illegal on Windows. Returns the trimmed name or
+// null when invalid. Keeps create/rename confined to a single directory level.
+function sanitizeEntryName(name: string): string | null {
+    const trimmed = (name || '').trim();
+    if (!trimmed || trimmed === '.' || trimmed === '..') return null;
+    if (/[\\/]/.test(trimmed)) return null;
+    if (/[<>:"|?*\x00-\x1f]/.test(trimmed)) return null;
+    if (trimmed.length > 255) return null;
+    return trimmed;
+}
+
 function createWindow(): void {
     const isMac = process.platform === 'darwin';
     mainWindow = new BrowserWindow({
@@ -338,6 +350,128 @@ function setupIPC(): void {
                 });
         } catch {
             return [];
+        }
+    });
+
+    // Read a text file for the in-app editor. Guards against oversized files
+    // and binary content (NUL byte sniff) so the editor never tries to load a
+    // multi-MB blob or render garbage.
+    ipcMain.handle('fs:read-file', async (_event, filePath: string) => {
+        const fs = require('fs') as typeof import('fs');
+        try {
+            const stat = fs.statSync(filePath);
+            const MAX = 5 * 1024 * 1024; // 5 MB
+            if (stat.size > MAX) {
+                return { success: false, error: '文件过大（超过 5MB），无法在编辑器中打开' };
+            }
+            const buf = fs.readFileSync(filePath);
+            // Binary sniff: a NUL in the first 8KB strongly implies non-text.
+            const probe = buf.subarray(0, Math.min(buf.length, 8192));
+            if (probe.includes(0)) {
+                return { success: false, error: '二进制文件，无法以文本方式打开' };
+            }
+            return { success: true, content: buf.toString('utf8') };
+        } catch (err: any) {
+            return { success: false, error: err?.message || '读取文件失败' };
+        }
+    });
+
+    // Write text content back to a file from the in-app editor.
+    ipcMain.handle('fs:write-file', async (_event, filePath: string, content: string) => {
+        const fs = require('fs') as typeof import('fs');
+        try {
+            fs.writeFileSync(filePath, content, 'utf8');
+            return { success: true };
+        } catch (err: any) {
+            return { success: false, error: err?.message || '保存文件失败' };
+        }
+    });
+
+    // Create an empty file. Fails if the target already exists so we never
+    // silently clobber existing content.
+    ipcMain.handle('fs:create-file', async (_event, dirPath: string, name: string) => {
+        const fs = require('fs') as typeof import('fs');
+        const nodePath = require('path') as typeof import('path');
+        const safe = sanitizeEntryName(name);
+        if (!safe) return { success: false, error: '名称无效' };
+        const target = nodePath.join(dirPath, safe);
+        try {
+            if (fs.existsSync(target)) return { success: false, error: '同名文件已存在' };
+            fs.writeFileSync(target, '', { flag: 'wx' });
+            return { success: true, path: target };
+        } catch (err: any) {
+            return { success: false, error: err?.message || '创建文件失败' };
+        }
+    });
+
+    // Create a directory (non-recursive); fails on existing name.
+    ipcMain.handle('fs:create-dir', async (_event, dirPath: string, name: string) => {
+        const fs = require('fs') as typeof import('fs');
+        const nodePath = require('path') as typeof import('path');
+        const safe = sanitizeEntryName(name);
+        if (!safe) return { success: false, error: '名称无效' };
+        const target = nodePath.join(dirPath, safe);
+        try {
+            if (fs.existsSync(target)) return { success: false, error: '同名文件夹已存在' };
+            fs.mkdirSync(target);
+            return { success: true, path: target };
+        } catch (err: any) {
+            return { success: false, error: err?.message || '创建文件夹失败' };
+        }
+    });
+
+    // Rename within the same parent directory. The new name is a leaf name,
+    // not a path, so renaming can't move the entry elsewhere.
+    ipcMain.handle('fs:rename', async (_event, oldPath: string, newName: string) => {
+        const fs = require('fs') as typeof import('fs');
+        const nodePath = require('path') as typeof import('path');
+        const safe = sanitizeEntryName(newName);
+        if (!safe) return { success: false, error: '名称无效' };
+        const target = nodePath.join(nodePath.dirname(oldPath), safe);
+        try {
+            if (target === oldPath) return { success: true, path: target };
+            if (fs.existsSync(target)) return { success: false, error: '同名项已存在' };
+            fs.renameSync(oldPath, target);
+            return { success: true, path: target };
+        } catch (err: any) {
+            return { success: false, error: err?.message || '重命名失败' };
+        }
+    });
+
+    // Delete a file or directory (recursive for dirs).
+    ipcMain.handle('fs:delete', async (_event, targetPath: string) => {
+        const fs = require('fs') as typeof import('fs');
+        try {
+            fs.rmSync(targetPath, { recursive: true, force: true });
+            return { success: true };
+        } catch (err: any) {
+            return { success: false, error: err?.message || '删除失败' };
+        }
+    });
+
+    // Move a file/dir into destDir. Rejects moving a directory into itself or
+    // its own descendant (which would corrupt the tree), and name collisions.
+    ipcMain.handle('fs:move', async (_event, srcPath: string, destDir: string) => {
+        const fs = require('fs') as typeof import('fs');
+        const nodePath = require('path') as typeof import('path');
+        try {
+            const name = nodePath.basename(srcPath);
+            const target = nodePath.join(destDir, name);
+            const srcResolved = nodePath.resolve(srcPath);
+            const destResolved = nodePath.resolve(destDir);
+            if (srcResolved === destResolved) return { success: false, error: '源和目标相同' };
+            if (nodePath.dirname(srcResolved) === destResolved) {
+                return { success: false, error: '已在该文件夹中' };
+            }
+            // Block moving a folder into its own subtree.
+            if ((destResolved + nodePath.sep).startsWith(srcResolved + nodePath.sep)) {
+                return { success: false, error: '不能移动到自身的子目录' };
+            }
+            if (fs.existsSync(target)) return { success: false, error: '目标文件夹中已存在同名项' };
+            fs.renameSync(srcPath, target);
+            return { success: true, path: target };
+        } catch (err: any) {
+            return { success: false, error: err?.message || '移动失败' };
         }
     });
 
