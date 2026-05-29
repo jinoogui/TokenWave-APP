@@ -53,10 +53,6 @@ jobs:
             name: macOS Apple Silicon
             build_cmd: npx electron-builder --mac dmg --arm64
             artifact: mac-arm64
-          - os: macos-13
-            name: macOS Intel
-            build_cmd: npx electron-builder --mac dmg --x64
-            artifact: mac-x64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
