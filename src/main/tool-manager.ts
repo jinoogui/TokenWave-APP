@@ -184,6 +184,91 @@ export class ToolManager {
         return fs.existsSync(this.getBundledNodeExecutable()) && fs.existsSync(this.getBundledNpmCli());
     }
 
+    /**
+     * OS-specific user-data root, used as the parent of the per-tool
+     * config directories (claude-home, codex-home, etc.). Mirrors what
+     * Electron's `app.getPath('userData')` would return for the host OS,
+     * so paths look natural on each platform.
+     */
+    private getPlatformAppDataDir(): string {
+        if (os.platform() === 'win32') {
+            return process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+        }
+        if (os.platform() === 'darwin') {
+            return path.join(os.homedir(), 'Library', 'Application Support');
+        }
+        return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+    }
+
+    /**
+     * Where Codex writes generated images for the current session. Co-locates
+     * them with the user's project so they're easy to find. Created lazily.
+     */
+    public getGeneratedImagesDir(cwd: string | null): string {
+        const base = (cwd && fs.existsSync(cwd))
+            ? cwd
+            : path.join(os.homedir(), 'Documents', 'TokenWave');
+        return path.join(base, 'generated_images');
+    }
+
+    /**
+     * Replace $CODEX_HOME/generated_images with a symlink pointing into the
+     * user's current project, so Codex's hardcoded output path lands somewhere
+     * the user can actually find. Re-creates the link on every launch in case
+     * cwd changed since the last session.
+     *
+     * macOS/Linux use POSIX symlinks. Windows uses a directory junction (does
+     * not require admin rights, unlike a real symlink).
+     */
+    private linkGeneratedImagesToProject(codexHomeDir: string): void {
+        const cwd = (this.configStore.get('defaultCwd') as string) || '';
+        const target = this.getGeneratedImagesDir(cwd || null);
+        const link = path.join(codexHomeDir, 'generated_images');
+
+        try {
+            fs.mkdirSync(target, { recursive: true });
+
+            // If the link path already exists, decide whether to keep it.
+            if (fs.existsSync(link) || this.isDanglingSymlink(link)) {
+                try {
+                    const current = fs.readlinkSync(link);
+                    if (path.resolve(current) === path.resolve(target)) return; // already correct
+                } catch { /* not a symlink — fall through to remove */ }
+
+                // Remove stale link/dir. Refuse if it's a real directory with files
+                // (could be from a prior install before this code existed).
+                const stat = fs.lstatSync(link);
+                if (stat.isSymbolicLink()) {
+                    fs.unlinkSync(link);
+                } else if (stat.isDirectory()) {
+                    const entries = fs.readdirSync(link);
+                    if (entries.length === 0) {
+                        fs.rmdirSync(link);
+                    } else {
+                        console.warn(`[ToolManager] ${link} is a non-empty real directory; leaving it alone`);
+                        return;
+                    }
+                }
+            }
+
+            const symlinkType = os.platform() === 'win32' ? 'junction' : 'dir';
+            fs.symlinkSync(target, link, symlinkType);
+            console.log(`[ToolManager] Linked ${link} → ${target}`);
+        } catch (err) {
+            console.warn('[ToolManager] Failed to link generated_images:', err);
+            // Non-fatal — Codex will still work, just write to the default location.
+        }
+    }
+
+    private isDanglingSymlink(p: string): boolean {
+        try {
+            const stat = fs.lstatSync(p);
+            return stat.isSymbolicLink();
+        } catch {
+            return false;
+        }
+    }
+
     private getBundledToolScript(toolId: string): string | null {
         const toolDir = this.getToolDir(toolId);
         switch (toolId) {
@@ -315,10 +400,11 @@ export class ToolManager {
         // =============================================
 
         // Shared config root for all embedded tools.
-        const appDataDir = path.join(
-            process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
-            'TokenWave'
-        );
+        // Per-platform location:
+        //   Windows: %APPDATA%\TokenWave
+        //   macOS:   ~/Library/Application Support/TokenWave
+        //   Linux:   ~/.config/TokenWave (XDG_CONFIG_HOME if set)
+        const appDataDir = path.join(this.getPlatformAppDataDir(), 'TokenWave');
 
         if (tool.id === 'claude-code') {
             if (os.platform() === 'win32') {
@@ -428,6 +514,11 @@ export class ToolManager {
             // the host-controlled fields and preserve the rest.
             const codexHomeDir = path.join(appDataDir, 'codex-home');
             fs.mkdirSync(codexHomeDir, { recursive: true });
+
+            // Codex hardcodes its image output to $CODEX_HOME/generated_images.
+            // We can't change that, so we redirect via a symlink to a folder
+            // inside the user's project so they can find their files.
+            this.linkGeneratedImagesToProject(codexHomeDir);
 
             const lines: string[] = [];
 
