@@ -8,6 +8,8 @@ import { ConfigStore } from './config-store';
 import { AppUpdater } from './app-updater';
 import { AuthManager } from './auth-manager';
 import { KeyProvisioner } from './key-provisioner';
+import { LocalConfigImporter } from './local-config-importer';
+import { AccountManager } from './account-manager';
 
 let mainWindow: BrowserWindow | null = null;
 let ptyManager: PtyManager;
@@ -16,6 +18,8 @@ let configStore: ConfigStore;
 let appUpdater: AppUpdater;
 let authManager: AuthManager;
 let keyProvisioner: KeyProvisioner;
+let localConfigImporter: LocalConfigImporter;
+let accountManager: AccountManager;
 
 function getResourcesPath(): string {
     if (app.isPackaged) {
@@ -228,6 +232,18 @@ function setupIPC(): void {
         authManager.logout();
     });
 
+    // ===== Local Config Import =====
+    // Reads ~/.claude/settings.json and ~/.codex/{config.toml,auth.json}
+    // and copies them into TokenWave's private claude-home/codex-home so
+    // bundled tools inherit the user's existing hooks, MCP servers, and
+    // API credentials without manual entry.
+    ipcMain.handle('local-config:scan', () => {
+        return localConfigImporter.scan();
+    });
+    ipcMain.handle('local-config:apply', async (_event, scan: any) => {
+        return localConfigImporter.apply(scan);
+    });
+
     // ===== Key Provisioning (Module 2) =====
     ipcMain.handle('provision:create-keys', async () => {
         const accessToken = authManager.getAccessToken();
@@ -247,6 +263,51 @@ function setupIPC(): void {
             }
         }
         return result;
+    });
+
+    // ===== Account (Module 3): balance, usage logs, top-up =====
+    ipcMain.handle('account:get-balance', async () => {
+        const accessToken = authManager.getAccessToken();
+        const userId = authManager.getUserId();
+        if (!accessToken || !userId) return { success: false, error: '未登录 TokenWave' };
+        return accountManager.getBalance(accessToken, userId);
+    });
+
+    ipcMain.handle('account:get-logs', async (_event, page: number, pageSize: number) => {
+        const accessToken = authManager.getAccessToken();
+        const userId = authManager.getUserId();
+        if (!accessToken || !userId) return { success: false, error: '未登录 TokenWave' };
+        return accountManager.getLogs(accessToken, userId, page || 1, pageSize || 20);
+    });
+
+    ipcMain.handle('account:get-price', async (_event, amount: number, channel: string) => {
+        const accessToken = authManager.getAccessToken();
+        const userId = authManager.getUserId();
+        if (!accessToken || !userId) return { success: false, error: '未登录 TokenWave' };
+        return accountManager.getTopupPrice(accessToken, userId, amount, channel || 'alipay');
+    });
+
+    ipcMain.handle('account:create-payment', async (_event, amount: number, method: string) => {
+        const accessToken = authManager.getAccessToken();
+        const userId = authManager.getUserId();
+        if (!accessToken || !userId) return { success: false, error: '未登录 TokenWave' };
+        // Returns order_no + qrContent so the renderer can show an in-app QR;
+        // it no longer auto-opens the browser.
+        return accountManager.createPayment(accessToken, userId, amount, method || 'alipay');
+    });
+
+    ipcMain.handle('account:query-order', async (_event, orderNo: string) => {
+        if (!orderNo) return { paid: false, error: '缺少订单号' };
+        return accountManager.queryOrder(orderNo);
+    });
+
+    // Open the hosted checkout page in the system browser (manual fallback).
+    ipcMain.handle('account:open-paylink', async (_event, payLink: string) => {
+        if (payLink && /^https?:\/\//.test(payLink)) {
+            shell.openExternal(payLink);
+            return { success: true };
+        }
+        return { success: false, error: '无效的支付链接' };
     });
 
     // ===== Dialog =====
@@ -348,6 +409,8 @@ app.whenReady().then(() => {
     appUpdater = new AppUpdater(configStore);
     authManager = new AuthManager(configStore);
     keyProvisioner = new KeyProvisioner();
+    localConfigImporter = new LocalConfigImporter(configStore, toolManager.getAppDataDir());
+    accountManager = new AccountManager();
 
     // Forward PTY data to renderer
     ptyManager.onData((sessionId: string, data: string) => {

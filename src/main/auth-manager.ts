@@ -60,14 +60,22 @@ export class AuthManager {
             // 1. Create isolated session (does not pollute main window)
             const authSession = session.fromPartition('auth-4router');
 
-            // 2. Create modal child BrowserWindow
+            // 2. Create child BrowserWindow.
+            //
+            // Not modal: a modal child blocks every event on the parent
+            // (including its own close button on macOS), so if anything in
+            // the login flow stalls the user has no way out without
+            // force-quitting. Keeping it as a regular child window lets the
+            // user close either window independently.
             this.loginWindow = new BrowserWindow({
                 width: 900,
                 height: 700,
                 parent: parentWindow,
-                modal: true,
+                modal: false,
                 title: '登录 TokenWave',
                 autoHideMenuBar: true,
+                minimizable: true,
+                closable: true,
                 webPreferences: {
                     session: authSession,
                     nodeIntegration: false,
@@ -77,6 +85,43 @@ export class AuthManager {
 
             // 3. Load the login page
             this.loginWindow.loadURL(`${ROUTER_BASE_URL}/login`);
+
+            // Inject a floating "取消登录" button into the page on every
+            // navigation so the user always has an in-page escape hatch
+            // even if the OS chrome misbehaves. The button signals back
+            // via console.log('__TW_CANCEL_LOGIN__'), which we listen
+            // for on the webContents below.
+            const injectCancelButton = () => {
+                if (!this.loginWindow || this.loginWindow.isDestroyed()) return;
+                this.loginWindow.webContents.executeJavaScript(`
+                    (() => {
+                        if (document.getElementById('__tw_cancel_login__')) return;
+                        const btn = document.createElement('button');
+                        btn.id = '__tw_cancel_login__';
+                        btn.textContent = '✕ 取消登录';
+                        btn.style.cssText = [
+                            'position:fixed','top:14px','right:14px','z-index:2147483647',
+                            'padding:8px 14px','border-radius:8px','border:none',
+                            'background:rgba(20,20,20,0.85)','color:#fff','font-size:13px',
+                            'font-family:-apple-system,BlinkMacSystemFont,sans-serif',
+                            'cursor:pointer','box-shadow:0 4px 12px rgba(0,0,0,0.25)',
+                            'backdrop-filter:blur(8px)',
+                        ].join(';');
+                        btn.onmouseenter = () => { btn.style.background = 'rgba(220,53,69,0.9)'; };
+                        btn.onmouseleave = () => { btn.style.background = 'rgba(20,20,20,0.85)'; };
+                        btn.onclick = () => { console.log('__TW_CANCEL_LOGIN__'); };
+                        document.body.appendChild(btn);
+                    })();
+                `).catch(() => { /* page may have navigated mid-injection — re-injects on next did-finish-load */ });
+            };
+            this.loginWindow.webContents.on('did-finish-load', injectCancelButton);
+            this.loginWindow.webContents.on('console-message', (_event, _level, message) => {
+                if (message.includes('__TW_CANCEL_LOGIN__')) {
+                    if (this.loginWindow && !this.loginWindow.isDestroyed()) {
+                        this.loginWindow.close();
+                    }
+                }
+            });
 
             // 4. Poll cookies to detect login success
             //    Every POLL_INTERVAL ms, grab cookies → try /api/user/token.

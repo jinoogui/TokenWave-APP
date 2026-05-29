@@ -200,6 +200,13 @@ export class ToolManager {
         return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
     }
 
+    /** TokenWave's per-user data root, used by callers that need to write
+        sibling configs alongside claude-home/codex-home (e.g. local-config
+        importer copies hooks/MCP files into these dirs). */
+    public getAppDataDir(): string {
+        return path.join(this.getPlatformAppDataDir(), 'TokenWave');
+    }
+
     /**
      * Where Codex writes generated images for the current session. Co-locates
      * them with the user's project so they're easy to find. Created lazily.
@@ -449,7 +456,21 @@ export class ToolManager {
             // Write settings JSON to a temp file to avoid shell escaping issues.
             // Passing JSON inline through PowerShell → cmd.exe → node.exe
             // mangles the string. A file path is always safe.
-            const settings: any = { env: {} };
+            //
+            // Read any existing settings.json first so user-managed sections
+            // (hooks, permissions, statusLine, etc.) survive re-launches.
+            // ToolManager only owns the host-controlled env vars below.
+            const settingsFile = path.join(claudeHomeDir, 'settings.json');
+            let settings: any = { env: {} };
+            if (fs.existsSync(settingsFile)) {
+                try {
+                    const existing = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+                    settings = existing;
+                    if (!settings.env || typeof settings.env !== 'object') settings.env = {};
+                } catch (e) {
+                    console.warn('[ToolManager] settings.json unreadable, recreating:', e);
+                }
+            }
             if (apiKey) {
                 settings.env['ANTHROPIC_AUTH_TOKEN'] = apiKey;
             }
@@ -487,16 +508,17 @@ export class ToolManager {
             settings['skipWebFetchPreflight'] = true;
 
             // Bypass all permission prompts when the user has opted in.
+            // Only mutate defaultMode — preserve user-defined allow/deny lists
+            // imported from ~/.claude/settings.json.
             if (this.configStore.get('ccBypassPermissions')) {
-                settings.permissions = { defaultMode: 'bypassPermissions' };
+                settings.permissions = settings.permissions || {};
+                settings.permissions.defaultMode = 'bypassPermissions';
             }
 
-            // Always write the settings file — the env block now contains
-            // 4RouterAi defaults even when apiKey/baseUrl are absent.
-            // Uses the native CC user-settings filename (settings.json) at
-            // CLAUDE_CONFIG_DIR root, matching cc/src/utils/settings/settings.ts.
-            const settingsFile = path.join(claudeHomeDir, 'settings.json');
-
+            // Write the merged settings file — env block carries 4RouterAi
+            // defaults plus host-controlled API credentials, while user
+            // sections (hooks, permissions, statusLine) are preserved from
+            // any existing file.
             fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf-8');
             args.push('--settings', settingsFile);
             console.log(`[ToolManager] Wrote Claude settings to ${settingsFile}`);

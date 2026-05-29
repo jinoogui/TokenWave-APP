@@ -88,6 +88,24 @@ contextBridge.exposeInMainWorld('routerAi', {
         createKeys: () => ipcRenderer.invoke('provision:create-keys'),
     },
 
+    // ===== Local Config Import =====
+    localConfig: {
+        scan: () => ipcRenderer.invoke('local-config:scan'),
+        apply: (scan: any) => ipcRenderer.invoke('local-config:apply', scan),
+    },
+
+    // ===== Account: balance, usage logs, top-up =====
+    account: {
+        getBalance: () => ipcRenderer.invoke('account:get-balance'),
+        getLogs: (page: number, pageSize: number) =>
+            ipcRenderer.invoke('account:get-logs', page, pageSize),
+        getPrice: (amount: number, channel: string) => ipcRenderer.invoke('account:get-price', amount, channel),
+        createPayment: (amount: number, method: string) =>
+            ipcRenderer.invoke('account:create-payment', amount, method),
+        queryOrder: (orderNo: string) => ipcRenderer.invoke('account:query-order', orderNo),
+        openPayLink: (payLink: string) => ipcRenderer.invoke('account:open-paylink', payLink),
+    },
+
     // ===== Dialog =====
     dialog: {
         selectDirectory: () => ipcRenderer.invoke('dialog:select-directory'),

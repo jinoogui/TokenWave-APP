@@ -2,6 +2,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
+import QRCode from 'qrcode';
 
 // ============================================================
 // 4RouterAi — Main Renderer Application
@@ -76,6 +77,7 @@ async function init() {
     setupWelcomeScreen();
     setupSidebar();
     setupSettings();
+    setupAccount();
     setupPtyListeners();
     setupResize();
     setupFileExplorer();
@@ -206,6 +208,7 @@ function showWelcomeScreen() {
 function showAppScreen() {
     welcomeScreen.classList.add('hidden');
     appScreen.classList.remove('hidden');
+    refreshSidebarAccount();
 }
 
 function shortenPath(/** @type {string} */ p) {
@@ -221,11 +224,17 @@ function setupWelcomeScreen() {
     const setupManual = /** @type {HTMLElement} */ ($('#setup-manual'));
     const btnManual = /** @type {HTMLElement} */ ($('#btn-manual-config'));
     const btnSave = /** @type {HTMLElement} */ ($('#btn-save-keys'));
+    const btnLocalImport = /** @type {HTMLElement} */ ($('#btn-local-import'));
 
     // 点击"自行配置" → 展开手动配置表单
     btnManual?.addEventListener('click', () => {
         setupChoice.classList.add('hidden');
         setupManual.classList.remove('hidden');
+    });
+
+    // 点击"从本机导入" → 扫描 ~/.claude 和 ~/.codex 然后弹确认
+    btnLocalImport?.addEventListener('click', async () => {
+        await runLocalImport();
     });
 
     btnSave?.addEventListener('click', async () => {
@@ -318,6 +327,124 @@ async function handle4RouterLogin() {
     }
 }
 
+// ===== Local Config Import =====
+// Reads ~/.claude and ~/.codex from the user's home and copies them
+// into TokenWave's private dirs so the bundled tools inherit hooks,
+// MCP servers and credentials without manual entry.
+async function runLocalImport() {
+    const btn = /** @type {HTMLButtonElement} */ ($('#btn-local-import'));
+    const orig = btn?.textContent;
+    try {
+        if (btn) { btn.textContent = '正在扫描...'; btn.disabled = true; }
+        const scan = await api.localConfig.scan();
+
+        if (!scan.claude.found && !scan.codex.found) {
+            alert('未在本机找到 Claude Code 或 Codex 配置。\n\n查找路径：\n  ~/.claude/settings.json\n  ~/.codex/config.toml\n\n请先安装并登录任一工具，或选择"自行配置"。');
+            return;
+        }
+
+        const hasAnthropic = await api.config.hasApiKey('anthropic');
+        const hasOpenai = await api.config.hasApiKey('openai');
+        const willOverwrite = hasAnthropic || hasOpenai;
+
+        const confirmed = await showLocalImportPreview(scan, willOverwrite);
+        if (!confirmed) return;
+
+        if (btn) btn.textContent = '正在导入...';
+        const result = await api.localConfig.apply(scan);
+
+        showAppScreen();
+        await refreshToolStatus();
+
+        if (result.applied?.length) {
+            console.log('[LocalImport] applied:', result.applied);
+        }
+    } catch (err) {
+        alert(`导入失败: ${err}`);
+    } finally {
+        if (btn) { btn.textContent = orig; btn.disabled = false; }
+    }
+}
+
+function escapeHtml(/** @type {string} */ s) {
+    return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function renderImportSection(/** @type {string} */ icon, /** @type {string} */ title, /** @type {Record<string, string|number|undefined>} */ fields) {
+    const visible = Object.entries(fields).filter(([, v]) => v !== undefined && v !== null && v !== '' && v !== 0);
+    const empty = visible.length === 0;
+    const rows = empty
+        ? '<div class="import-fields"><span class="value value-mute" style="grid-column:1/-1">未在本机找到对应配置文件</span></div>'
+        : '<div class="import-fields">' +
+          visible.map(([k, v]) => `<span class="label">${escapeHtml(k)}</span><span class="value">${escapeHtml(String(v))}</span>`).join('') +
+          '</div>';
+    return `
+        <div class="import-section ${empty ? 'import-section-empty' : ''}">
+            <div class="import-section-title">
+                <span class="import-icon">${icon}</span>
+                <span>${escapeHtml(title)}</span>
+                <span class="import-status">${empty ? '未找到' : '已检测'}</span>
+            </div>
+            ${rows}
+        </div>
+    `;
+}
+
+function maskKey(/** @type {string|undefined} */ key) {
+    if (!key) return undefined;
+    if (key.length <= 16) return key.slice(0, 6) + '…';
+    return key.slice(0, 10) + '…' + key.slice(-4);
+}
+
+async function showLocalImportPreview(/** @type {any} */ scan, /** @type {boolean} */ willOverwrite) {
+    const modal = $('#local-import-modal');
+    const body = $('#local-import-body');
+    if (!modal || !body) return false;
+
+    const claudeHtml = renderImportSection('🟣', 'Claude Code  ~/.claude/settings.json', {
+        'API Key': maskKey(scan.claude.apiKey),
+        'Base URL': scan.claude.baseUrl,
+        'Model': scan.claude.model,
+        'Hooks': scan.claude.hooksCount ? `${scan.claude.hooksCount} 项` : undefined,
+        'Allow rules': scan.claude.permissionsAllow ? `${scan.claude.permissionsAllow} 条` : undefined,
+    });
+    const codexHtml = renderImportSection('🟢', 'Codex CLI  ~/.codex/', {
+        'API Key': maskKey(scan.codex.apiKey),
+        'Base URL': scan.codex.baseUrl,
+        'Model': scan.codex.model,
+        'MCP servers': scan.codex.mcpServersCount ? `${scan.codex.mcpServersCount} 个` : undefined,
+        'Trusted projects': scan.codex.projectsCount ? `${scan.codex.projectsCount} 个` : undefined,
+    });
+    const warning = willOverwrite
+        ? '<div class="import-warning">⚠️ 检测到 TokenWave 已存在配置，导入将覆盖现有 API Key、Base URL 与模型设置。Hooks / MCP 服务器会被合并。</div>'
+        : '';
+    body.innerHTML = claudeHtml + codexHtml + warning;
+
+    modal.classList.remove('hidden');
+
+    return await new Promise(resolve => {
+        const cleanup = () => {
+            modal.classList.add('hidden');
+            $('#btn-confirm-local-import')?.removeEventListener('click', onConfirm);
+            $('#btn-cancel-local-import')?.removeEventListener('click', onCancel);
+            $('#btn-close-local-import')?.removeEventListener('click', onCancel);
+            $('#local-import-overlay')?.removeEventListener('click', onCancel);
+            document.removeEventListener('keydown', onKey);
+        };
+        const onConfirm = () => { cleanup(); resolve(true); };
+        const onCancel = () => { cleanup(); resolve(false); };
+        const onKey = (/** @type {KeyboardEvent} */ e) => {
+            if (e.key === 'Escape') onCancel();
+            else if (e.key === 'Enter') onConfirm();
+        };
+        $('#btn-confirm-local-import')?.addEventListener('click', onConfirm);
+        $('#btn-cancel-local-import')?.addEventListener('click', onCancel);
+        $('#btn-close-local-import')?.addEventListener('click', onCancel);
+        $('#local-import-overlay')?.addEventListener('click', onCancel);
+        document.addEventListener('keydown', onKey);
+    });
+}
+
 // ===== Sidebar =====
 function setupSidebar() {
     $('#btn-launch-claude')?.addEventListener('click', () => launchTool('claude-code'));
@@ -345,6 +472,8 @@ function setupSidebar() {
     });
 
     $('#btn-settings')?.addEventListener('click', () => openSettings());
+
+    $('#btn-account')?.addEventListener('click', () => openAccount());
 
     $('#btn-open-website')?.addEventListener('click', () => {
         window.open('https://api.dshub.top');
@@ -1055,6 +1184,409 @@ async function loadDebugPreviews() {
     } catch (e) {
         if (codexPreview) codexPreview.textContent = '获取失败: ' + e;
     }
+}
+
+// ===== Account: balance, recharge, usage logs =====
+const accountState = {
+    quotaPerUnit: 500000,
+    currencySymbol: '$',
+    selectedAmount: 0,
+    payMethod: 'alipay',
+    logsPage: 1,
+    logsPageSize: 20,
+    logsHasMore: false,
+};
+
+/** Convert raw quota units to a display currency string. */
+function formatQuota(/** @type {number} */ quota) {
+    if (typeof quota !== 'number' || isNaN(quota)) return '--';
+    const usd = quota / (accountState.quotaPerUnit || 500000);
+    return `${accountState.currencySymbol}${usd.toFixed(2)}`;
+}
+
+/** Refresh the compact balance shown in the sidebar user area. */
+async function refreshSidebarAccount() {
+    const nameEl = $('#account-username');
+    const balEl = $('#account-balance');
+    try {
+        const loggedIn = await api.auth.isLoggedIn();
+        if (!loggedIn) {
+            if (nameEl) nameEl.textContent = '未登录';
+            if (balEl) balEl.textContent = '余额 --';
+            return;
+        }
+        const res = await api.account.getBalance();
+        if (res?.success) {
+            if (res.quotaPerUnit) accountState.quotaPerUnit = res.quotaPerUnit;
+            if (nameEl) nameEl.textContent = res.username || 'TokenWave 用户';
+            if (balEl) balEl.textContent = `余额 ${formatQuota(res.quota)}`;
+        } else {
+            if (balEl) balEl.textContent = '余额 --';
+        }
+    } catch {
+        if (balEl) balEl.textContent = '余额 --';
+    }
+}
+
+function setupAccount() {
+    $('#btn-close-account')?.addEventListener('click', closeAccount);
+    $('#account-overlay')?.addEventListener('click', closeAccount);
+
+    // Tab switching
+    document.querySelectorAll('.account-tab').forEach((tab) => {
+        tab.addEventListener('click', () => switchAccountTab(/** @type {HTMLElement} */(tab).dataset.tab || 'recharge'));
+    });
+
+    // Amount presets
+    document.querySelectorAll('.account-amount-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const amount = Number(/** @type {HTMLElement} */(btn).dataset.amount || 0);
+            accountState.selectedAmount = amount;
+            const input = /** @type {HTMLInputElement} */ ($('#account-amount-input'));
+            if (input) input.value = String(amount);
+            document.querySelectorAll('.account-amount-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            updatePricePreview();
+        });
+    });
+
+    const amountInput = /** @type {HTMLInputElement} */ ($('#account-amount-input'));
+    amountInput?.addEventListener('input', () => {
+        accountState.selectedAmount = Number(amountInput.value || 0);
+        document.querySelectorAll('.account-amount-btn').forEach(b => b.classList.remove('active'));
+        updatePricePreview();
+    });
+
+    // 支付渠道选择
+    document.querySelectorAll('.account-pay-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            accountState.payMethod = /** @type {HTMLElement} */(btn).dataset.method || 'alipay';
+            document.querySelectorAll('.account-pay-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            updatePricePreview(); // 渠道倍率不同，重新计算实付金额
+        });
+    });
+
+    $('#btn-recharge-submit')?.addEventListener('click', submitRecharge);
+    $('#btn-qr-back')?.addEventListener('click', resetRechargeForm);
+    $('#btn-qr-open-browser')?.addEventListener('click', () => {
+        if (qrState.payLink) api.account.openPayLink(qrState.payLink);
+    });
+    $('#btn-logs-refresh')?.addEventListener('click', () => { accountState.logsPage = 1; loadLogs(); });
+    $('#btn-logs-prev')?.addEventListener('click', () => {
+        if (accountState.logsPage > 1) { accountState.logsPage--; loadLogs(); }
+    });
+    $('#btn-logs-next')?.addEventListener('click', () => {
+        if (accountState.logsHasMore) { accountState.logsPage++; loadLogs(); }
+    });
+}
+
+async function openAccount() {
+    const loggedIn = await api.auth.isLoggedIn();
+    if (!loggedIn) {
+        alert('请先登录 TokenWave 账号');
+        return;
+    }
+    const modal = $('#account-modal');
+    modal?.classList.remove('hidden');
+    switchAccountTab('recharge');
+    accountState.selectedAmount = 0;
+    const amountInput = /** @type {HTMLInputElement} */ ($('#account-amount-input'));
+    if (amountInput) amountInput.value = '';
+    document.querySelectorAll('.account-amount-btn').forEach(b => b.classList.remove('active'));
+    const priceEl = $('#account-price-preview');
+    if (priceEl) priceEl.textContent = '--';
+    const msgEl = $('#account-recharge-msg');
+    if (msgEl) { msgEl.textContent = ''; msgEl.className = 'account-msg'; }
+    resetRechargeForm();
+    await loadAccountBalance();
+}
+
+function closeAccount() {
+    stopOrderPolling();
+    $('#account-modal')?.classList.add('hidden');
+}
+
+function switchAccountTab(/** @type {string} */ tab) {
+    document.querySelectorAll('.account-tab').forEach((t) => {
+        t.classList.toggle('active', /** @type {HTMLElement} */(t).dataset.tab === tab);
+    });
+    $('#account-panel-recharge')?.classList.toggle('hidden', tab !== 'recharge');
+    $('#account-panel-logs')?.classList.toggle('hidden', tab !== 'logs');
+    if (tab === 'logs') { stopOrderPolling(); resetRechargeForm(); accountState.logsPage = 1; loadLogs(); }
+}
+
+async function loadAccountBalance() {
+    const balEl = $('#account-modal-balance');
+    const nameEl = $('#account-modal-username');
+    const usedEl = $('#account-modal-used');
+    if (balEl) balEl.textContent = '加载中...';
+    try {
+        const res = await api.account.getBalance();
+        if (!res?.success) {
+            if (balEl) balEl.textContent = '获取失败';
+            return;
+        }
+        if (res.quotaPerUnit) accountState.quotaPerUnit = res.quotaPerUnit;
+        if (balEl) balEl.textContent = formatQuota(res.quota);
+        if (nameEl) nameEl.textContent = res.username || '';
+        if (usedEl) usedEl.textContent = `已用 ${formatQuota(res.usedQuota)}`;
+    } catch (err) {
+        if (balEl) balEl.textContent = '获取失败';
+    }
+}
+
+async function submitRecharge() {
+    const msgEl = $('#account-recharge-msg');
+    const btn = /** @type {HTMLButtonElement} */ ($('#btn-recharge-submit'));
+    const amount = accountState.selectedAmount;
+    if (!amount || amount <= 0) {
+        if (msgEl) { msgEl.textContent = '请输入有效的充值数量'; msgEl.className = 'account-msg error'; }
+        return;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = '正在创建订单...'; }
+    if (msgEl) { msgEl.textContent = ''; msgEl.className = 'account-msg'; }
+    try {
+        const res = await api.account.createPayment(amount, accountState.payMethod);
+        if (!res?.success) {
+            if (msgEl) { msgEl.textContent = `创建订单失败: ${res?.error || '未知错误'}`; msgEl.className = 'account-msg error'; }
+            return;
+        }
+        // Stripe：网关返回托管 checkout 链接，直接在系统浏览器打开。
+        if (res.browserOnly) {
+            await api.account.openPayLink(res.payLink);
+            if (msgEl) {
+                msgEl.textContent = '已在浏览器中打开 Stripe 支付页面，完成后请点击余额刷新。';
+                msgEl.className = 'account-msg success';
+            }
+            return;
+        }
+        await showQrView(res);
+    } catch (err) {
+        if (msgEl) { msgEl.textContent = `创建订单失败: ${err}`; msgEl.className = 'account-msg error'; }
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '前往支付'; }
+    }
+}
+
+// ===== 扫码支付：二维码渲染 + 订单轮询 =====
+const qrState = {
+    orderNo: null,
+    payLink: null,
+    pollTimer: null,
+    deadline: 0,
+};
+
+/** 展示二维码视图，渲染二维码并启动轮询。 */
+async function showQrView(/** @type {any} */ pay) {
+    qrState.orderNo = pay.orderNo || null;
+    qrState.payLink = pay.payLink || null;
+
+    const view = $('#account-qr-view');
+    const presets = $('#account-amount-presets');
+    const custom = document.querySelector('.account-amount-custom');
+    const payMethods = document.querySelector('.account-pay-methods');
+    const priceRow = document.querySelector('.account-price-row');
+    const submitBtn = $('#btn-recharge-submit');
+    // 隐藏表单，露出二维码视图
+    [presets, custom, payMethods, priceRow, submitBtn].forEach(el => el?.classList.add('hidden'));
+    view?.classList.remove('hidden');
+
+    const amountEl = $('#account-qr-amount');
+    const priceTxt = $('#account-price-preview')?.textContent || '';
+    if (amountEl) amountEl.textContent = priceTxt && priceTxt !== '--' ? priceTxt : `数量 ${accountState.selectedAmount}`;
+
+    const statusEl = $('#account-qr-status');
+    const maskEl = $('#account-qr-mask');
+    maskEl?.classList.add('hidden');
+    if (statusEl) { statusEl.textContent = '等待支付中...'; statusEl.className = 'account-qr-status'; }
+
+    // 渲染二维码：优先用 qr.alipay.com 内容，缺失则回退到 payLink
+    const qrText = pay.qrContent || pay.payLink;
+    const canvas = /** @type {HTMLCanvasElement} */ ($('#account-qr-canvas'));
+    if (canvas && qrText) {
+        try {
+            await QRCode.toCanvas(canvas, qrText, { width: 240, margin: 1 });
+        } catch {
+            if (statusEl) { statusEl.textContent = '二维码生成失败，请点击下方按钮在浏览器支付'; statusEl.className = 'account-qr-status error'; }
+        }
+    }
+
+    startOrderPolling();
+}
+
+/** 每 2 秒轮询订单状态，最多 5 分钟。 */
+function startOrderPolling() {
+    stopOrderPolling();
+    if (!qrState.orderNo) return;
+    qrState.deadline = Date.now() + 5 * 60 * 1000;
+    qrState.pollTimer = setInterval(async () => {
+        if (Date.now() > qrState.deadline) {
+            stopOrderPolling();
+            const statusEl = $('#account-qr-status');
+            if (statusEl) { statusEl.textContent = '二维码已超时，请返回重新发起'; statusEl.className = 'account-qr-status error'; }
+            return;
+        }
+        try {
+            const res = await api.account.queryOrder(qrState.orderNo);
+            if (res?.paid) {
+                stopOrderPolling();
+                onPaymentSuccess();
+            }
+        } catch { /* 忽略单次失败，继续轮询 */ }
+    }, 2000);
+}
+
+function stopOrderPolling() {
+    if (qrState.pollTimer) { clearInterval(qrState.pollTimer); qrState.pollTimer = null; }
+}
+
+/** 支付成功：打勾遮罩 + 刷新余额，2 秒后回到充值表单。 */
+function onPaymentSuccess() {
+    const statusEl = $('#account-qr-status');
+    const maskEl = $('#account-qr-mask');
+    if (maskEl) { maskEl.textContent = '✓'; maskEl.classList.remove('hidden'); }
+    if (statusEl) { statusEl.textContent = '支付成功！正在刷新余额...'; statusEl.className = 'account-qr-status success'; }
+    loadAccountBalance();
+    refreshSidebarAccount();
+    setTimeout(() => { resetRechargeForm(); }, 2200);
+}
+
+/** 关闭二维码视图，恢复充值表单。 */
+function resetRechargeForm() {
+    stopOrderPolling();
+    qrState.orderNo = null;
+    qrState.payLink = null;
+    $('#account-qr-view')?.classList.add('hidden');
+    $('#account-amount-presets')?.classList.remove('hidden');
+    document.querySelector('.account-amount-custom')?.classList.remove('hidden');
+    document.querySelector('.account-pay-methods')?.classList.remove('hidden');
+    document.querySelector('.account-price-row')?.classList.remove('hidden');
+    $('#btn-recharge-submit')?.classList.remove('hidden');
+}
+
+let pricePreviewTimer = null;
+/** Debounced fetch of the real money charged for the selected quantity. */
+function updatePricePreview() {
+    const el = $('#account-price-preview');
+    const amount = accountState.selectedAmount;
+    if (!el) return;
+    if (!amount || amount <= 0) { el.textContent = '--'; return; }
+    el.textContent = '计算中...';
+    if (pricePreviewTimer) clearTimeout(pricePreviewTimer);
+    pricePreviewTimer = setTimeout(async () => {
+        try {
+            const res = await api.account.getPrice(amount, accountState.payMethod);
+            if (res?.success && res.price != null) {
+                el.textContent = `${accountState.currencySymbol}${res.price}`;
+            } else {
+                el.textContent = res?.error || '--';
+            }
+        } catch {
+            el.textContent = '--';
+        }
+    }, 350);
+}
+
+const LOG_TYPE_LABELS = { 1: '充值', 2: '消费', 3: '管理', 4: '系统', 5: '错误' };
+
+async function loadLogs() {
+    const body = $('#account-logs-body');
+    const statusEl = $('#account-logs-status');
+    const pageEl = $('#account-logs-page');
+    if (body) body.innerHTML = '<tr><td colspan="9" class="account-logs-empty">加载中...</td></tr>';
+    if (pageEl) pageEl.textContent = `第 ${accountState.logsPage} 页`;
+    try {
+        const res = await api.account.getLogs(accountState.logsPage, accountState.logsPageSize);
+        if (!res?.success) {
+            if (body) body.innerHTML = `<tr><td colspan="9" class="account-logs-empty">获取失败: ${res?.error || ''}</td></tr>`;
+            return;
+        }
+        const items = res.items || [];
+        accountState.logsHasMore = items.length >= accountState.logsPageSize;
+        if (statusEl) statusEl.textContent = `共 ${res.total ?? items.length} 条`;
+        if (!items.length) {
+            if (body) body.innerHTML = '<tr><td colspan="9" class="account-logs-empty">暂无记录</td></tr>';
+            return;
+        }
+        if (body) body.innerHTML = items.map(renderLogRow).join('');
+    } catch (err) {
+        if (body) body.innerHTML = `<tr><td colspan="9" class="account-logs-empty">获取失败: ${err}</td></tr>`;
+    }
+}
+
+function renderLogRow(/** @type {any} */ log) {
+    const ts = log.created_at ?? log.created_time;
+    const time = ts ? new Date(ts * 1000).toLocaleString('zh-CN') : '--';
+    const type = LOG_TYPE_LABELS[log.type] || String(log.type ?? '--');
+    const model = escapeHtml(log.model_name || '--');
+
+    const pt = Number(log.prompt_tokens || 0);
+    const ct = Number(log.completion_tokens || 0);
+    const cache = Number(log.cache_tokens || 0);
+    // prompt_tokens 含缓存部分，未命中输入 = 总输入 - 缓存
+    const freshIn = Math.max(pt - cache, 0);
+
+    // 输入列：显示「未命中（总输入）」，鼠标悬停给出明细
+    const inTitle = `总输入 ${fmtNum(pt)} = 未命中 ${fmtNum(freshIn)} + 缓存 ${fmtNum(cache)}`;
+    const inCell = pt
+        ? `<span title="${inTitle}">${fmtNum(freshIn)}<span class="log-dim">/${fmtNum(pt)}</span></span>`
+        : '--';
+
+    // 缓存列：缓存 token 数 + 折扣比例
+    let cacheCell = '--';
+    if (cache > 0) {
+        const ratioTxt = typeof log.cache_ratio === 'number'
+            ? ` <span class="log-dim">×${log.cache_ratio}</span>` : '';
+        cacheCell = `<span title="缓存命中 ${fmtNum(cache)} tokens，按 ${log.cache_ratio ?? '?'} 倍计费">${fmtNum(cache)}${ratioTxt}</span>`;
+    } else if (pt > 0) {
+        cacheCell = '<span class="log-dim">0</span>';
+    }
+
+    const outCell = ct ? fmtNum(ct) : '--';
+
+    // 命中率 = 缓存 / 总输入
+    let hitCell = '--';
+    if (pt > 0) {
+        const rate = (cache / pt) * 100;
+        const cls = rate >= 50 ? 'log-hit-high' : (rate > 0 ? 'log-hit-mid' : 'log-hit-low');
+        hitCell = `<span class="${cls}">${rate.toFixed(0)}%</span>`;
+    }
+
+    // 耗时：优先显示首字延迟(ttft)，否则总耗时(use_time)
+    let timeCell = '--';
+    if (typeof log.ttft === 'number' && log.ttft >= 0) {
+        timeCell = `<span title="首字延迟">${(log.ttft / 1000).toFixed(1)}s</span>`;
+    } else if (typeof log.use_time === 'number' && log.use_time > 0) {
+        timeCell = `<span title="总耗时">${log.use_time}s</span>`;
+    }
+
+    const quota = (log.type === 2 && typeof log.quota === 'number') ? formatQuota(log.quota) : '--';
+
+    // 模型 tooltip 附带推理强度/请求路径等元信息
+    const metaBits = [];
+    if (log.reasoning_effort) metaBits.push(`推理:${log.reasoning_effort}`);
+    if (log.model_ratio) metaBits.push(`倍率:${log.model_ratio}`);
+    if (log.request_path) metaBits.push(log.request_path);
+    const modelTitle = escapeHtml([log.model_name || '', ...metaBits].filter(Boolean).join(' · '));
+
+    return `<tr>`
+        + `<td>${time}</td>`
+        + `<td>${type}</td>`
+        + `<td class="log-model" title="${modelTitle}">${model}</td>`
+        + `<td class="log-num">${inCell}</td>`
+        + `<td class="log-num">${cacheCell}</td>`
+        + `<td class="log-num">${outCell}</td>`
+        + `<td class="log-num">${hitCell}</td>`
+        + `<td class="log-num">${timeCell}</td>`
+        + `<td class="log-num">${quota}</td>`
+        + `</tr>`;
+}
+
+/** 千分位格式化，便于阅读大 token 数。 */
+function fmtNum(/** @type {number} */ n) {
+    if (typeof n !== 'number' || isNaN(n)) return '0';
+    return n.toLocaleString('en-US');
 }
 
 // ===== File Explorer =====

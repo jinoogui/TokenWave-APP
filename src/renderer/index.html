@@ -73,6 +73,16 @@
           <p>登录 TokenWave 账号，自动同步 API 配置</p>
           <button id="btn-login-4router" class="btn-primary" style="width:100%;margin-top:12px;">一键配置</button>
         </div>
+
+        <!-- 从本机导入 -->
+        <div class="setup-card setup-card-choice" id="card-local-import">
+          <div class="setup-card-header">
+            <span class="tool-icon">📥</span>
+            <h3>从本机导入</h3>
+          </div>
+          <p>读取已安装的 Claude Code / Codex 配置</p>
+          <button id="btn-local-import" class="btn-primary" style="width:100%;margin-top:12px;">扫描本机</button>
+        </div>
       </div>
 
       <!-- 第二阶段：手动配置表单（默认隐藏） -->
@@ -166,6 +176,13 @@
       </div>
 
       <div class="sidebar-bottom">
+        <button id="btn-account" class="sidebar-user" title="账户与充值">
+          <span class="sidebar-user-avatar" id="account-avatar">👤</span>
+          <span class="sidebar-user-info">
+            <span class="sidebar-user-name" id="account-username">未登录</span>
+            <span class="sidebar-user-balance" id="account-balance">余额 --</span>
+          </span>
+        </button>
         <button id="btn-open-website" class="sidebar-action-btn">
           <span>🌐</span>
           <span>官网</span>
@@ -358,6 +375,135 @@
       <div class="modal-footer">
         <button id="btn-apply-config" class="btn-primary">应用更新</button>
         <button id="btn-dismiss-config" class="btn-secondary">暂不更新</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Local Config Import Preview Modal -->
+  <div id="local-import-modal" class="modal hidden">
+    <div class="modal-overlay" id="local-import-overlay"></div>
+    <div class="modal-content local-import-modal-content">
+      <div class="modal-header">
+        <h2>📥 从本机导入配置</h2>
+        <button class="btn-icon" id="btn-close-local-import" title="关闭">✕</button>
+      </div>
+      <div class="modal-body" id="local-import-body">
+        <!-- populated by app.js -->
+      </div>
+      <div class="modal-footer">
+        <button id="btn-cancel-local-import" class="btn-secondary">取消</button>
+        <button id="btn-confirm-local-import" class="btn-primary">导入并开始使用</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Account / Recharge / Usage Records Modal -->
+  <div id="account-modal" class="modal hidden">
+    <div class="modal-overlay" id="account-overlay"></div>
+    <div class="modal-content account-modal-content">
+      <div class="modal-header">
+        <h2>💳 我的账户</h2>
+        <button class="btn-icon" id="btn-close-account" title="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <!-- Balance summary -->
+        <div class="account-balance-card">
+          <div class="account-balance-row">
+            <span class="account-balance-label">当前余额</span>
+            <span class="account-balance-value" id="account-modal-balance">--</span>
+          </div>
+          <div class="account-balance-row account-balance-sub">
+            <span id="account-modal-username">--</span>
+            <span id="account-modal-used">已用 --</span>
+          </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="account-tabs">
+          <button class="account-tab active" data-tab="recharge">充值</button>
+          <button class="account-tab" data-tab="logs">使用记录</button>
+        </div>
+
+        <!-- Recharge panel -->
+        <div class="account-panel" id="account-panel-recharge">
+          <p class="account-hint">选择或输入充值数量，下方显示实付金额，点击后将在浏览器中打开支付页面。</p>
+          <div class="account-amount-presets" id="account-amount-presets">
+            <button class="account-amount-btn" data-amount="10">10</button>
+            <button class="account-amount-btn" data-amount="20">20</button>
+            <button class="account-amount-btn" data-amount="50">50</button>
+            <button class="account-amount-btn" data-amount="100">100</button>
+            <button class="account-amount-btn" data-amount="200">200</button>
+          </div>
+          <div class="account-amount-custom">
+            <label>自定义数量</label>
+            <input type="number" id="account-amount-input" class="text-input" min="1" step="1" placeholder="输入充值数量">
+          </div>
+          <div class="account-pay-methods">
+            <label class="account-pay-label">支付方式</label>
+            <div class="account-pay-options" id="account-pay-options">
+              <button class="account-pay-btn active" data-method="alipay">
+                <span class="account-pay-icon">🟦</span> 支付宝
+              </button>
+              <button class="account-pay-btn" data-method="stripe">
+                <span class="account-pay-icon">💳</span> Stripe(信用卡)
+              </button>
+            </div>
+          </div>
+          <div class="account-price-row">
+            <span>实付金额</span>
+            <span id="account-price-preview" class="account-price-value">--</span>
+          </div>
+          <button id="btn-recharge-submit" class="btn-primary" style="width:100%;margin-top:14px;">
+            前往支付
+          </button>
+          <div id="account-recharge-msg" class="account-msg"></div>
+
+          <!-- 扫码支付视图（默认隐藏，创建订单后显示） -->
+          <div id="account-qr-view" class="account-qr-view hidden">
+            <button id="btn-qr-back" class="account-qr-back">← 返回</button>
+            <h3 class="account-qr-title">请使用手机支付宝扫码支付</h3>
+            <div class="account-qr-amount">应付 <b id="account-qr-amount">--</b></div>
+            <div class="account-qr-canvas-wrap">
+              <canvas id="account-qr-canvas"></canvas>
+              <div id="account-qr-mask" class="account-qr-mask hidden"></div>
+            </div>
+            <div id="account-qr-status" class="account-qr-status">等待支付中...</div>
+            <button id="btn-qr-open-browser" class="btn-secondary btn-small">无法扫码？在浏览器中打开</button>
+          </div>
+        </div>
+
+        <!-- Usage logs panel -->
+        <div class="account-panel hidden" id="account-panel-logs">
+          <div class="account-logs-toolbar">
+            <button id="btn-logs-refresh" class="btn-secondary btn-small">刷新</button>
+            <span id="account-logs-status" class="account-logs-status"></span>
+          </div>
+          <div class="account-logs-table-wrap">
+            <table class="account-logs-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>类型</th>
+                  <th>模型</th>
+                  <th>输入</th>
+                  <th>缓存</th>
+                  <th>输出</th>
+                  <th>命中率</th>
+                  <th>耗时</th>
+                  <th>额度</th>
+                </tr>
+              </thead>
+              <tbody id="account-logs-body">
+                <tr><td colspan="9" class="account-logs-empty">加载中...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="account-logs-pager">
+            <button id="btn-logs-prev" class="btn-secondary btn-small">上一页</button>
+            <span id="account-logs-page">第 1 页</span>
+            <button id="btn-logs-next" class="btn-secondary btn-small">下一页</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
