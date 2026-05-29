@@ -6,8 +6,8 @@ import * as path from 'path';
 import * as os from 'os';
 import { ConfigStore } from './config-store';
 
-const GITHUB_API_URL = 'https://api.github.com/repos/jinoogui/4RouterAiApp/releases/latest';
-const REMOTE_CONFIG_URL = 'https://raw.githubusercontent.com/jinoogui/4RouterAiApp/main/remote-config.json';
+const GITHUB_API_URL = 'https://api.github.com/repos/jinoogui/TokenWave-APP/releases/latest';
+const REMOTE_CONFIG_URL = 'https://raw.githubusercontent.com/jinoogui/TokenWave-APP/main/remote-config.json';
 
 /**
  * All Chinese GitHub proxy/mirror services for speed testing.
@@ -185,14 +185,26 @@ export class AppUpdater {
             const latestVersion = (release.tag_name || '').replace(/^v/, '');
             const releaseNotes = release.body || '';
 
-            // Find .exe asset for Windows
+            // Pick the asset that matches the current platform & architecture.
+            // Release contains: Windows .exe (x64), macOS .dmg (arm64 and x64).
             let downloadUrl = '';
             if (release.assets && Array.isArray(release.assets)) {
-                const exeAsset = release.assets.find((a: any) =>
-                    a.name && (a.name.endsWith('.exe') || a.name.endsWith('.zip')) && a.browser_download_url
-                );
-                if (exeAsset) {
-                    downloadUrl = exeAsset.browser_download_url;
+                const assets = release.assets.filter((a: any) => a.name && a.browser_download_url);
+                const arch = process.arch; // 'arm64' | 'x64'
+                let match: any;
+
+                if (process.platform === 'darwin') {
+                    // Prefer the dmg matching this Mac's architecture, fall back to any dmg.
+                    match = assets.find((a: any) =>
+                        a.name.endsWith('.dmg') && a.name.includes(arch)
+                    ) || assets.find((a: any) => a.name.endsWith('.dmg'));
+                } else if (process.platform === 'win32') {
+                    match = assets.find((a: any) => a.name.endsWith('.exe'))
+                        || assets.find((a: any) => a.name.endsWith('.zip'));
+                }
+
+                if (match) {
+                    downloadUrl = match.browser_download_url;
                 }
             }
 

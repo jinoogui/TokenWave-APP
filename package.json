@@ -80,6 +80,7 @@
             ]
         },
         "dmg": {
+            "artifactName": "${productName}-${version}-${arch}.${ext}",
             "window": {
                 "width": 540,
                 "height": 400
