@@ -145,6 +145,11 @@ function getTerminalTheme(/** @type {string} */ theme) {
 
 // ===== Window Controls =====
 function setupWindowControls() {
+    // Tag the body so platform-conditional CSS can hide our custom titlebar
+    // controls on macOS (the OS draws native traffic-light buttons there).
+    const platform = api.platform || (window.routerAi && window.routerAi.platform) || '';
+    if (platform) document.body.classList.add(`platform-${platform}`);
+
     $('#btn-minimize')?.addEventListener('click', () => api.window.minimize());
     $('#btn-maximize')?.addEventListener('click', () => api.window.maximize());
     $('#btn-close')?.addEventListener('click', () => api.window.close());
@@ -343,6 +348,13 @@ function setupSidebar() {
 
     $('#btn-open-website')?.addEventListener('click', () => {
         window.open('https://api.dshub.top');
+    });
+
+    $('#btn-open-images')?.addEventListener('click', async () => {
+        const result = await api.tools.openGeneratedImages();
+        if (!result?.success) {
+            alert(`打开图片目录失败: ${result?.error || '未知错误'}`);
+        }
     });
 
     setupAppUpdateButton();
@@ -846,6 +858,7 @@ function setupSettings() {
     const btnClose = /** @type {HTMLElement} */ ($('#btn-close-settings'));
     const btnSave = /** @type {HTMLElement} */ ($('#btn-save-settings'));
     const btnCancel = /** @type {HTMLElement} */ ($('#btn-cancel-settings'));
+    const btnLogout = /** @type {HTMLButtonElement} */ ($('#btn-logout'));
     const overlay = settingsModal.querySelector('.modal-overlay');
 
     const closeModal = () => settingsModal.classList.add('hidden');
@@ -853,6 +866,24 @@ function setupSettings() {
     btnClose?.addEventListener('click', closeModal);
     btnCancel?.addEventListener('click', closeModal);
     overlay?.addEventListener('click', closeModal);
+
+    btnLogout?.addEventListener('click', async () => {
+        const ok = confirm('退出登录会清除本地保存的 access token 和已生成的 Claude/Codex API key。\n\n下次启动需要重新登录 TokenWave。要继续吗？');
+        if (!ok) return;
+        try {
+            await api.auth.logout();
+            // Also clear the provisioned API keys so the next session re-runs
+            // the full login + provision flow against potentially-rotated keys.
+            await api.config.setApiKey('anthropic', '');
+            await api.config.setApiKey('openai', '');
+            await api.config.set('firstLaunch', true);
+            closeModal();
+            // Reload window to drop in-memory tab state and land on welcome page
+            location.reload();
+        } catch (err) {
+            alert(`退出登录失败: ${err}`);
+        }
+    });
 
     btnSave?.addEventListener('click', async () => {
         const anthropicKey = /** @type {HTMLInputElement} */ ($('#settings-key-anthropic'))?.value?.trim();
@@ -903,6 +934,16 @@ async function openSettings() {
     const anthropicBaseUrl = await api.config.getBaseUrl('anthropic');
     const openaiBaseUrl = await api.config.getBaseUrl('openai');
     const theme = await api.config.get('theme');
+
+    // Login status indicator in the Account section.
+    const loggedIn = await api.auth.isLoggedIn();
+    const statusEl = $('#account-status-text');
+    const logoutBtn = /** @type {HTMLButtonElement} */ ($('#btn-logout'));
+    if (statusEl) {
+        statusEl.textContent = loggedIn ? '已登录 TokenWave' : '未登录';
+        statusEl.style.color = loggedIn ? '#3fb950' : '#8b949e';
+    }
+    if (logoutBtn) logoutBtn.disabled = !loggedIn;
 
     const themeSelect = /** @type {HTMLSelectElement} */ ($('#settings-theme'));
     if (themeSelect) themeSelect.value = theme || 'fruit';

@@ -232,6 +232,15 @@ input {
     padding-left: 16px;
 }
 
+/* macOS: hide our custom min/max/close buttons (native traffic lights are
+   shown by the OS), and shift the logo right to clear the traffic-light area. */
+body.platform-darwin .titlebar-controls {
+    display: none;
+}
+body.platform-darwin .titlebar-drag {
+    padding-left: 88px;
+}
+
 .titlebar-logo {
     display: flex;
     align-items: center;

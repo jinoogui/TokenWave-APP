@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 // Expose a safe API to the renderer process via contextBridge
 contextBridge.exposeInMainWorld('routerAi', {
+    // Read-only host info — used for OS-conditional UI (e.g. hide custom
+    // titlebar controls on macOS where the OS draws traffic-light buttons).
+    platform: process.platform,
     // ===== Tool Management =====
     tools: {
         list: () => ipcRenderer.invoke('tools:list'),
@@ -9,6 +12,8 @@ contextBridge.exposeInMainWorld('routerAi', {
         update: (toolId: string) => ipcRenderer.invoke('tools:update', toolId),
         getLaunchPreview: (toolId: string) => ipcRenderer.invoke('tools:get-launch-preview', toolId),
         checkUpdate: (toolId: string) => ipcRenderer.invoke('tools:check-update', toolId),
+        openGeneratedImages: () =>
+            ipcRenderer.invoke('tools:open-generated-images') as Promise<{ success: boolean; path?: string; error?: string }>,
     },
 
     // ===== Terminal (PTY) =====

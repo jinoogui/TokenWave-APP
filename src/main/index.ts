@@ -25,6 +25,7 @@ function getResourcesPath(): string {
 }
 
 function createWindow(): void {
+    const isMac = process.platform === 'darwin';
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
@@ -32,21 +33,43 @@ function createWindow(): void {
         minHeight: 600,
         title: 'TokenWave',
         backgroundColor: '#0d1117',
-        frame: false,
-        titleBarStyle: 'hidden',
-        titleBarOverlay: {
-            color: '#0d1117',
-            symbolColor: '#c9d1d9',
-            height: 38,
-        },
+        // macOS: keep native traffic-light buttons; the titlebar area becomes
+        // a draggable transparent strip that we render our logo into.
+        // Windows/Linux: fully custom titlebar with overlay-rendered controls.
+        frame: isMac ? undefined : false,
+        titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
+        ...(isMac ? {} : {
+            titleBarOverlay: {
+                color: '#0d1117',
+                symbolColor: '#c9d1d9',
+                height: 38,
+            },
+        }),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
             contextIsolation: true,
             sandbox: false, // Required for node-pty IPC
         },
-        icon: path.join(__dirname, '..', '..', 'resources', 'icon.ico'),
+        // Per-platform window icon (the .ico is Windows-only; .icns is for
+        // packaged macOS .app bundles where Electron picks it up via
+        // electron-builder, so the BrowserWindow icon field there is ignored).
+        icon: isMac
+            ? path.join(__dirname, '..', '..', 'resources', 'icon.icns')
+            : path.join(__dirname, '..', '..', 'resources', 'icon.ico'),
     });
+
+    // Dock icon for macOS development mode. In a packaged .app, Electron uses
+    // the icon set in Info.plist via electron-builder, so this is a no-op.
+    // Use the PNG directly here — Electron's nativeImage rejects some valid
+    // .icns files in dev, while PNG works on every platform.
+    if (isMac && app.dock) {
+        try {
+            app.dock.setIcon(path.join(__dirname, '..', '..', 'resources', 'icon.png'));
+        } catch (err) {
+            console.warn('[index] Failed to set dock icon:', err);
+        }
+    }
 
     // Load renderer
     if (process.env.NODE_ENV === 'development') {
@@ -108,14 +131,16 @@ function setupIPC(): void {
     });
 
     // ===== Window Titlebar Overlay =====
+    // setTitleBarOverlay only exists on Windows/Linux. On macOS the native
+    // traffic-light buttons handle theming themselves.
     ipcMain.handle('window:set-titlebar-overlay', (_event, colors: { color: string; symbolColor: string }) => {
-        if (mainWindow) {
-            mainWindow.setTitleBarOverlay({
-                color: colors.color,
-                symbolColor: colors.symbolColor,
-                height: 38,
-            });
-        }
+        if (!mainWindow || process.platform === 'darwin') return;
+        if (typeof mainWindow.setTitleBarOverlay !== 'function') return;
+        mainWindow.setTitleBarOverlay({
+            color: colors.color,
+            symbolColor: colors.symbolColor,
+            height: 38,
+        });
     });
 
     // ===== Config Management =====
@@ -296,6 +321,20 @@ function setupIPC(): void {
         } catch (err) {
             console.error('[clipboard:save-dropped-image] failed:', err);
             return null;
+        }
+    });
+
+    // Open the Codex-generated-images folder for the current project.
+    // Creates it if needed so the user always lands in a real folder.
+    ipcMain.handle('tools:open-generated-images', async () => {
+        try {
+            const cwd = (configStore.get('defaultCwd') as string) || '';
+            const dir = toolManager.getGeneratedImagesDir(cwd || null);
+            fs.mkdirSync(dir, { recursive: true });
+            await shell.openPath(dir);
+            return { success: true, path: dir };
+        } catch (err: any) {
+            return { success: false, error: err?.message || String(err) };
         }
     });
 }
