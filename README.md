@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-Windows-blue?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/electron-33-47848f?style=flat-square&logo=electron" alt="Electron">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
 </p>
@@ -48,23 +48,45 @@
 - 内置 **复制/粘贴** 工具栏，支持 `Ctrl+C` / `Ctrl+V` 快捷键
 - **图片粘贴/拖拽** — 可将剪贴板或拖入的图片作为附件喂给 Claude Code
 
+### 📁 文件浏览器与编辑器
+- 侧边面板内置文件树浏览器，自动跟随当前活动标签页的工作目录
+- **打开并编辑文件** — 双击文件在新标签页用 [CodeMirror](https://codemirror.net/) 打开，带语法高亮（JS/TS/JSON/CSS/HTML/Markdown/Python），`Ctrl/Cmd+S` 保存
+- **目录管理** — 右键菜单支持新建文件、新建文件夹、重命名、删除
+- **拖拽移动** — 直接拖动文件/文件夹到目标目录完成移动
+- **快捷操作** — 右键「在终端中打开此目录」「复制路径」
+- 支持展开/折叠目录结构，刷新后保留展开状态
+
 ### 📦 零配置运行环境
 - **内置 Node.js 运行时** — 无需全局安装 Node.js
 - **内置 MinGit** — Claude Code 运行所需的 Git 环境自动配置（Windows）
 - **自动检测更新** — 启动时非阻塞检查 CLI 工具新版本，一键更新
 
-### 📁 文件浏览器
-- 侧边面板内置文件树浏览器
-- 自动跟随当前活动标签页的工作目录
-- 支持展开/折叠目录结构
-
 ---
 
 ## 📥 安装
 
-### 方式一：下载安装包（推荐）
+前往 [Releases](../../releases) 页面下载对应平台的安装包：
 
-前往 [Releases](../../releases) 页面下载最新的 `.exe` 安装包，双击运行安装即可。
+| 平台 | 安装包 |
+| --- | --- |
+| Windows | `TokenWave Setup x.x.x.exe` |
+| macOS (Apple Silicon) | `TokenWave-x.x.x-arm64.dmg` |
+| macOS (Intel) | `TokenWave-x.x.x-x64.dmg` |
+
+### Windows
+
+双击 `.exe` 安装包运行安装即可。
+
+### macOS
+
+打开 `.dmg`，将 TokenWave 拖入「应用程序」文件夹。
+
+> ⚠️ 由于安装包未经 Apple 公证，首次打开可能提示「已损坏」或「无法验证开发者」。这是 macOS 的安全机制，并非应用损坏。解除方法（dmg 内附《安装说明-必读.txt》有详细步骤）：
+>
+> ```bash
+> # 自动检测安装位置并解除限制，复制整行到终端执行
+> for p in /Applications/TokenWave.app ~/Applications/TokenWave.app; do [ -e "$p" ] && xattr -cr "$p" && echo "已解除限制: $p"; done
+> ```
 
 ---
 
@@ -90,7 +112,7 @@
 
 - 🟣 **Claude Code** — 启动 Anthropic 的 AI 编程助手
 - 🟢 **Codex CLI** — 启动 OpenAI 的命令行代理
-- ⬛ **Terminal** — 启动一个普通的 PowerShell 终端
+- ⬛ **Terminal** — 启动一个普通的系统终端（Windows 为 PowerShell，macOS 为默认 shell）
 
 每点击一次都会创建一个新的标签页，你可以同时运行多个会话。
 
@@ -141,6 +163,17 @@ npm run dev
 npm start
 ```
 
+### 打包
+
+发布版本由 GitHub Actions 统一打包（同时产出 Windows / macOS arm64 / macOS Intel 三个安装包）：
+
+1. 在 `package.json` 中升级 `version`
+2. 推送到 `main` 分支
+3. 在仓库 **Actions → Build & Release → Run workflow** 手动触发
+
+> 本地也可单独打包当前平台：`npm run package`（Windows）/ `npm run package:mac`（macOS Apple Silicon）。
+> 注意：本地 macOS 打包只能产出与本机架构一致的包；跨架构（如在 Apple Silicon 上打 Intel 包）需通过 CI。
+
 ### 项目结构
 
 ```
@@ -161,13 +194,17 @@ TokenWave/
 │   └── renderer/                   # 渲染进程（前端 UI）
 │       ├── index.html              # 主页面
 │       ├── app.js                  # 应用逻辑
+│       ├── editor.js               # CodeMirror 文件编辑器封装
 │       └── styles/global.css       # 全局样式
 ├── scripts/
 │   ├── bundle-tools.mjs            # 打包工具脚本（下载 CLI 和运行时）
 │   └── build*.bat / build.ps1      # 构建脚本
 ├── resources/
 │   ├── bundled-tools/              # 内置的 CLI 工具和运行时
-│   └── icon.ico                    # 应用图标
+│   ├── dmg/                        # macOS dmg 内附说明文件
+│   ├── icon.ico                    # Windows 应用图标
+│   └── icon.icns                   # macOS 应用图标
+├── .github/workflows/release.yml   # 三平台 CI 打包（Win / macOS arm64 / macOS x64）
 ├── vite.config.ts                  # Vite 构建配置
 └── package.json                    # 项目配置
 ```
