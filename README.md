@@ -21,6 +21,8 @@
 
 **TokenWave** 是一个开箱即用的多Agent桌面应用，将 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Anthropic) 和 [Codex CLI](https://github.com/openai/codex) (OpenAI) 两大 AI 编程工具整合到一个统一的界面中。无需复杂的环境配置，开箱即用。
 
+> 本项目 Fork 自 [4Router/4RouterAiApp](https://github.com/4Router/4RouterAiApp)，在其基础上进行了功能扩展与维护。感谢上游项目作者的工作。
+
 <p align="center">
   <img src="docs/images/screenshot.png" alt="TokenWave 应用截图" width="800">
 </p>
